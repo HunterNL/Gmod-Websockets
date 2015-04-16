@@ -132,7 +132,6 @@ function WS:receiveCallback(socket,packet)
 			print("PAYLOAD LENGTH "..self.current_message.payload_length)
 			self.current_message.receiveProgress = 2
 			self.bClient:Receive(self.current_message.payload_length) --I'm crashing gmod yay
-			//self.bClient:Receive(6)
 		else
 			print("PROGRESS: "..self.current_message.receiveProgress)
 			print("PAYLOAD: "..packet:ReadStringAll())
@@ -188,7 +187,7 @@ function WS:connect()
 	self.bClient:Connect(self.host,self.port)
 end
 
-function WS:send(data) //Doesn't work yet
+function WS:send(data) --Doesn't work yet
 	local packet = self:createDataFrame(data)
 	self.bClient:Send(packet,true)
 end
@@ -210,7 +209,7 @@ function WS:sendHTTPHandShake()
 	packet:WriteLine("Sec-WebSocket-Version: 13")
 	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode("1234567890abcdef"))
 
-	packet:WriteLine("") //Empty line to finish request
+	packet:WriteLine("") --Empty line to finish request
 
 	self.bClient:Send(packet,true)
 end
@@ -224,7 +223,7 @@ function WS:createDataFrame(data)
 	local packet = BromPacket()
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
 	packet:WriteByte(0x80+data_size) --mask+data size
-	packet:WriteByte(0xF0) --mask //TODO Not be terrible
+	packet:WriteByte(0xF0) --mask --TODO Not be terrible
 	packet:WriteByte(0xF0) --mask
 	packet:WriteByte(0xF0) --mask
 	packet:WriteByte(0xF0) --mask
