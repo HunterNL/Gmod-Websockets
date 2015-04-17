@@ -201,6 +201,29 @@ function WS:close()
 	self.bClient:Disconnect()
 end
 
+function WS.createMask()
+	local mask = {}
+	local i
+	for i=1,4 do
+		mask[i]=math.random(255)
+	end
+	return mask
+end
+
+function WS.writeMask(packet,mask)
+	local i
+	for i=1,4 do
+		packet:WriteByte(mask[i])
+	end
+end
+
+function WS.writeDataEncoded(packet,data,mask)
+	local i
+	for i = 1,#data do
+		packet:WriteByte(bit.bxor(string.byte(data[i]),mask[((i-1)%4)+1]))
+	end
+end
+
 function WS:sendHTTPHandShake()
 	local packet = BromPacket()
 
@@ -219,7 +242,7 @@ function WS:sendHTTPHandShake()
 	self.bClient:Send(packet,true)
 end
 
-[[--
+--[[
 function WS.createCloseFrame()
 	local packet = BromPacket()
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_CNX_CLOSE)
@@ -233,19 +256,15 @@ end
 
 function WS:createDataFrame(data)
 	local data_size = #data --Data size must be in bytes
+	local mask = WS.createMask()
 	if(data_size>=127) then print("too large, unsupported right now!!") end
 
 	local packet = BromPacket()
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
 	packet:WriteByte(0x80+data_size) --mask+data size
-	packet:WriteByte(0xF0) --mask --TODO Not be terrible
-	packet:WriteByte(0xF0) --mask
-	packet:WriteByte(0xF0) --mask
-	packet:WriteByte(0xF0) --mask
+	WS.writeMask(packet,mask)
+	WS.writeDataEncoded(packet,data,mask)
 
-	for i = 1,#data do
-		packet:WriteByte(bit.bxor(string.byte(data[i]),self.mask[((i-1)%4)+1]))
-	end
 
 	return packet
 end
@@ -306,34 +325,3 @@ concommand.Add("ws_send",function(ply,cmd,args,argsString)
 		gsocket:send(argsString)
 	end
 end)
---[[
-private LinkedList<Byte> readPackage(Socket client) throws IOException {
-        BufferedInputStream bis = new BufferedInputStream(client.getInputStream());
-        LinkedList<Byte> recievedPackage = new LinkedList();
-        int readByte=0;
-        int payloadLength = 0;
-        boolean mask=false;
-        int maskCode = 0;
-        int headerSize=2;
-        while ((readByte=bis.read())!=-1){
-            recievedPackage.add(new Integer(readByte).byteValue());
-            if(recievedPackage.size()==2){
-                if((readByte & 0x80)!=0){
-                    mask=true;
-                    headerSize+=4;
-                }
-                System.out.println(readByte);
-                payloadLength = readByte & (~0x80);
-                System.out.println("Payload length: " + payloadLength);
-                payloadLength = (int) Math.floor(payloadLength/8);
-                System.out.println("Payload length in Byte: " + payloadLength + " Header length in byte: " + headerSize);
-            }
-            else if(recievedPackage.size()>=(headerSize+payloadLength)){
-                break;
-            }
-
-        }
-        return recievedPackage;
-    }
-
-]]
