@@ -51,14 +51,12 @@ function WS.parseUrl(url)
 	end
 
 	local pathindex = string.find(url,"/")
-	if (pathindex > -1) then
+	if (pathindex && pathindex > -1) then
 		ret.host = string.sub(url,1,pathindex-1)
 		ret.path = string.sub(url,pathindex)
 	else
 		ret.host = url
 	end
-
-
 
 	return ret;
 end
@@ -70,11 +68,16 @@ function WS:connectCallback(socket,connected,ip,port)
 	end
 	print("Connected!")
 
-	self:sendHTTPHandShake()
-	self.bClient:ReceiveUntil("\r\n\r\n")
+	self:sendHTTPHandShake() --Send the HTTP handshake
+	self.bClient:ReceiveUntil("\r\n\r\n") --And await the server's
 end
 
 function WS:sentCallback(socket,length)
+	if(self.state=="CLOSING") then
+		self.bClient:Close()
+		self.state = "CLOSED"
+		print("Closed websocket connection")
+	end
 	print("Sent "..length.." bytes")
 end
 
@@ -89,14 +92,19 @@ function WS:readHeader(packet)
 	print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
 	if message > 127 then
 		self.current_message.FIN = true
-		self.current_message.opcode = WS.findOpcode(message-128)
+		self.current_message.opcode = message-128
 	else
 		self.current_message.FIN = false
-		self.current_message.opcode = WS.findOpcode(message)
+		self.current_message.opcode = message
 	end
 
 	message = packet:ReadByte(1)
 	print("MASK/LEN: "..toBitsMSB(message,8))
+	print("OPCODE: "..self.current_message.opcode)
+
+	if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
+		self.state = "CLOSING"
+	end
 
 	if message>127 then
 		self.current_message.mask_enabled = true
@@ -126,25 +134,43 @@ function WS:receiveCallback(socket,packet)
 		self.state = "CONNECTED"
 		self:prepareToReceive()
 
-		local packet = self:createDataFrame("tigers are pretty cool")
-		self.bClient:Send(packet,true)
-		--self.bClient:Receive(1)
+		--local packet = self:createDataFrame("tigers are pretty cool")
+		--self.bClient:Send(packet,true)
+
 	elseif self.state == "CONNECTED" then
 
 		--If we haven't started receiving yet, receive just the first 2 bytes
 		if(self.current_message.receiveProgress==0) then
 			self:readHeader(packet)
 
-			self.bClient:Receive(self.current_message.payload_length) --Sometimes crashes?
+			if(self.current_message.payload_length>0) then
+				self.bClient:Receive(self.current_message.payload_length) --Sometimes crashes?
+			else
+				print("No payload")
+				self:OnMessageEnd()
+			end
 		else
 			--Else receive the payload
-			print("PROGRESS: "..self.current_message.receiveProgress)
-			print("PAYLOAD: "..packet:ReadStringAll())
-			self:prepareToReceive()
+			self.current_message.payload = packet:ReadStringAll()
+			self:OnMessageEnd()
 		end
 
+	else
+		WS.Error("Message received while in invalid state",self.state)
 	end
 
+end
+
+function WS:OnMessageEnd()
+	local msg = self.current_message
+	print("PAYLOAD: ".. (msg.payload or "None"))
+	print("OPCODE:"..msg.opcode)
+
+	if(msg.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
+		self:close(msg.payload)
+	else
+		self:prepareToReceive()
+	end
 end
 
 function WS.Create(url,port)
@@ -154,13 +180,6 @@ function WS.Create(url,port)
 
 	self.port = port
 	self.url = url
-
-	self.mask = {
-		0xF0,
-		0xF0,
-		0xF0,
-		0xF0
-	}
 
 	local url_info = WS.parseUrl(url)
 
@@ -192,13 +211,15 @@ function WS:connect()
 	self.bClient:Connect(self.host,self.port)
 end
 
-function WS:send(data) --Doesn't work yet
+function WS:send(data)
 	local packet = self:createDataFrame(data)
 	self.bClient:Send(packet,true)
 end
 
-function WS:close()
-	self.bClient:Disconnect()
+function WS:close(reason)
+	local packet = WS.createCloseFrame(reason)
+	self.state = "CLOSING"
+	self.bClient:Send(packet,true)
 end
 
 function WS.createMask()
@@ -220,7 +241,11 @@ end
 function WS.writeDataEncoded(packet,data,mask)
 	local i
 	for i = 1,#data do
-		packet:WriteByte(bit.bxor(string.byte(data[i]),mask[((i-1)%4)+1]))
+		local byte = data[i]
+		if(type(byte)=="string") then
+			byte = string.byte(byte)
+		end
+		packet:WriteByte(bit.bxor(byte,mask[((i-1)%4)+1]))
 	end
 end
 
@@ -242,17 +267,19 @@ function WS:sendHTTPHandShake()
 	self.bClient:Send(packet,true)
 end
 
---[[
-function WS.createCloseFrame()
+function WS.createCloseFrame(reason) --Reason is a number, see the RFC
 	local packet = BromPacket()
+	local mask = WS.createMask()
+	local data_size = reason and 2 or 0
+
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_CNX_CLOSE)
-	packet:WriteByte(0x90+2)
-	packet:WriteByte(0xF0) --mask --TODO Not be terrible
-	packet:WriteByte(0xF0) --mask
-	packet:WriteByte(0xF0) --mask
-	packet:WriteByte(0xF0) --mask
+	packet:WriteByte(0x80+data_size)
+	WS.writeMask(packet,mask)
+	if(reason) then
+		WS.writeDataEncoded({3,232+reason-1000}) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
+	end
+	return packet
 end
---]]
 
 function WS:createDataFrame(data)
 	local data_size = #data --Data size must be in bytes
@@ -292,12 +319,6 @@ function WS.error(msg)
 	ErrorNoHalt("\nWEBSOCKET ERROR\n"..msg.."\n\n")
 end
 
-function WS.findOpcode(message)
-	for k,v in pairs(WS.OPCODES) do
-		if(message==v) then return k end
-	end
-	WS.error("No opcode found for "..message)
-end
 
 concommand.Add("ws_test",function()
 
@@ -305,12 +326,13 @@ concommand.Add("ws_test",function()
 		gsocket:close()
 	end
 
-	--gsocket = WS:Create("http://requestb.in/1iqubg81",80)
-	--gsocket = WS:Create("echo.websocket.org/?encoding=text",80)
-	gsocket = WS.Create("ws://echo.websocket.org/",80)
-	--gsocket = WS:Create("roundtable.servebeer.com",11155)
-	--gsocket = WS:Create("192.168.1.123",9001)
+	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
+	--gsocket = WS.Create("echo.websocket.org/?encoding=text",80)
+	--gsocket = WS.Create("ws://echo.websocket.org/",80)
+	--gsocket = WS.Create("roundtable.servebeer.com",11155)
+	--gsocket = WS.Create("192.168.1.123",9001)
 	--gsocket = WS.Create("hunternl.no-ip.org",4175)
+	gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
 	gsocket:connect()
 end)
 
