@@ -50,7 +50,7 @@ function WS.parseUrl(url)
 		url = string.Right(url,#url-protocolIndex-2)
 	end
 
-	local pathindex = string.IndexOf("/",url)
+	local pathindex = string.find(url,"/")
 	if (pathindex > -1) then
 		ret.host = string.sub(url,1,pathindex-1)
 		ret.path = string.sub(url,pathindex)
@@ -78,64 +78,69 @@ function WS:sentCallback(socket,length)
 	print("Sent "..length.." bytes")
 end
 
+function WS:prepareToReceive()
+	self.current_message = {}
+	self.current_message.receiveProgress = 0
+	self.bClient:Receive(2)
+end
+
+function WS:readHeader(packet)
+	message = packet:ReadByte(1)
+	print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
+	if message > 127 then
+		self.current_message.FIN = true
+		self.current_message.opcode = WS.findOpcode(message-128)
+	else
+		self.current_message.FIN = false
+		self.current_message.opcode = WS.findOpcode(message)
+	end
+
+	message = packet:ReadByte(1)
+	print("MASK/LEN: "..toBitsMSB(message,8))
+
+	if message>127 then
+		self.current_message.mask_enabled = true
+		self.current_message.payload_length = message-128
+	else
+		self.current_message.mask_enabled = false
+		self.current_message.payload_length = message
+	end
+
+	print("MASK: "..(mask_enabled and "True" or "False"))
+	print("PAYLOAD LENGTH "..self.current_message.payload_length)
+	self.current_message.receiveProgress = 2
+end
+
 function WS:receiveCallback(socket,packet)
-	print("received ".. packet:InSize() .." bytes")
+	print("receiving ".. packet:InSize() .." bytes")
 	local message
 
-	if not self.handshakereceived then
+	if self.state == "CONNECTING" then
 		--message = packet:ReadStringAll():Trim()
 		httphandshake = packet:ReadStringAll()
 		if(!WS.verifyhandshake(httphandshake)) then
 			return false
 		end
 
-		print(httphandshake)
-
 		print("Received valid HTTP handshake, Sending dummy frame")
-		self.handshakereceived = true
-		self.current_message = {}
-		self.current_message.receiveProgress = 0
+		self.state = "CONNECTED"
+		self:prepareToReceive()
 
 		local packet = self:createDataFrame("tigers are pretty cool")
 		self.bClient:Send(packet,true)
-		self.bClient:Receive(2)
 		--self.bClient:Receive(1)
-	else
+	elseif self.state == "CONNECTED" then
 
+		--If we haven't started receiving yet, receive just the first 2 bytes
 		if(self.current_message.receiveProgress==0) then
+			self:readHeader(packet)
 
-			message = packet:ReadByte(1)
-			print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
-			if message > 127 then
-				self.current_message.FIN = true
-				self.current_message.opcode = WS.findOpcode(message-128)
-			else
-				self.current_message.FIN = false
-				self.current_message.opcode = WS.findOpcode(message)
-			end
-
-
-			message = packet:ReadByte(1)
-			print("MASK/LEN: "..toBitsMSB(message,8))
-
-			if message>127 then
-				self.current_message.mask_enabled = true
-				self.current_message.payload_length = message-128
-			else
-				self.current_message.mask_enabled = false
-				self.current_message.payload_length = message
-			end
-
-
-
-			print("MASK: "..(mask_enabled and "True" or "False"))
-			print("PAYLOAD LENGTH "..self.current_message.payload_length)
-			self.current_message.receiveProgress = 2
-			self.bClient:Receive(self.current_message.payload_length) --I'm crashing gmod yay
+			self.bClient:Receive(self.current_message.payload_length) --Sometimes crashes?
 		else
+			--Else receive the payload
 			print("PROGRESS: "..self.current_message.receiveProgress)
 			print("PAYLOAD: "..packet:ReadStringAll())
-
+			self:prepareToReceive()
 		end
 
 	end
@@ -145,7 +150,7 @@ end
 function WS.Create(url,port)
 	local self = setmetatable({},WS)
 
-	self.handshakereceived = false
+	self.state = "CONNECTING"
 
 	self.port = port
 	self.url = url
@@ -214,11 +219,21 @@ function WS:sendHTTPHandShake()
 	self.bClient:Send(packet,true)
 end
 
+[[--
+function WS.createCloseFrame()
+	local packet = BromPacket()
+	packet:WriteByte(0x80+WS.OPCODES.OPCODE_CNX_CLOSE)
+	packet:WriteByte(0x90+2)
+	packet:WriteByte(0xF0) --mask --TODO Not be terrible
+	packet:WriteByte(0xF0) --mask
+	packet:WriteByte(0xF0) --mask
+	packet:WriteByte(0xF0) --mask
+end
+--]]
+
 function WS:createDataFrame(data)
-	print(data);
 	local data_size = #data --Data size must be in bytes
 	if(data_size>=127) then print("too large, unsupported right now!!") end
-	print("Created frame with size: "..data_size)
 
 	local packet = BromPacket()
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
