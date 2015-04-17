@@ -74,7 +74,7 @@ end
 
 function WS:sentCallback(socket,length)
 	if(self.state=="CLOSING") then
-		self.bClient:Close()
+		--self.bClient:Close() --Start timeout here
 		self.state = "CLOSED"
 		print("Closed websocket connection")
 	end
@@ -100,11 +100,10 @@ function WS:readHeader(packet)
 
 	message = packet:ReadByte(1)
 	print("MASK/LEN: "..toBitsMSB(message,8))
-	print("OPCODE: "..self.current_message.opcode)
 
-	if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
-		self.state = "CLOSING"
-	end
+	--if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
+		--self.state = "CLOSING"
+	--end
 
 	if message>127 then
 		self.current_message.mask_enabled = true
@@ -136,9 +135,7 @@ function WS:receiveCallback(socket,packet)
 
 		--local packet = self:createDataFrame("tigers are pretty cool")
 		--self.bClient:Send(packet,true)
-
-	elseif self.state == "CONNECTED" then
-
+	else
 		--If we haven't started receiving yet, receive just the first 2 bytes
 		if(self.current_message.receiveProgress==0) then
 			self:readHeader(packet)
@@ -146,17 +143,25 @@ function WS:receiveCallback(socket,packet)
 			if(self.current_message.payload_length>0) then
 				self.bClient:Receive(self.current_message.payload_length) --Sometimes crashes?
 			else
-				print("No payload")
 				self:OnMessageEnd()
 			end
 		else
 			--Else receive the payload
+			--[[if(self.current_message.opcode==WS.OPCODES.OPCODE_TEXT_FRAME) then
+				self.current_message.payload = packet:ReadStringAll()
+			elseif (self.current_message.opcode==WS.OPCODES.OPCODE_CNX_CLOSE) then
+				self.current_message.close = {
+					code = packet:ReadUShort(),
+					reason = packet:ReadStringAll()
+				}
+			else
+				print("Unknow opcode "..self.current_message.opcode .. WS.findOpcode(self.current_message.opcode))
+			end
+			]]--
 			self.current_message.payload = packet:ReadStringAll()
+
 			self:OnMessageEnd()
 		end
-
-	else
-		WS.Error("Message received while in invalid state",self.state)
 	end
 
 end
@@ -164,11 +169,33 @@ end
 function WS:OnMessageEnd()
 	local msg = self.current_message
 	print("PAYLOAD: ".. (msg.payload or "None"))
-	print("OPCODE:"..msg.opcode)
+	print("OPCODE:"..msg.opcode.." "..WS.findOpcode(msg.opcode))
 
 	if(msg.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
-		self:close(msg.payload)
+
+		if(self.state=="CLOSING") then
+			self.state="CLOSED"
+			print("Websocket connection closed after response from server")
+
+		elseif(self.state=="CONNECTED") then
+			self.state="CLOSING as commanded by server"
+			if(msg.payload_length>0) then
+				print("REMOTE CLOSE CLODE "..msg.payload)
+			else
+				print("NO CLOSE CODE?!")
+			end
+			self:sendCloseFrame(tonumber(msg.payload))
+
+		else
+			WS.Error("Message received in invalid socket state "..self.state)
+		end
+
 	else
+
+		if(self.echo) then
+			self:send(msg.payload)
+		end
+
 		self:prepareToReceive()
 	end
 end
@@ -216,9 +243,17 @@ function WS:send(data)
 	self.bClient:Send(packet,true)
 end
 
-function WS:close(reason)
+function WS:close(reason) --For client initiated clossing
+	if(self.state=="CONNECTED") then
+		self:sendCloseFrame(1000)
+	else
+		WS.Error("Tried to close while in invalid socket state "..self.state)
+	end
+
+end
+
+function WS:sendCloseFrame(reason)
 	local packet = WS.createCloseFrame(reason)
-	self.state = "CLOSING"
 	self.bClient:Send(packet,true)
 end
 
@@ -276,13 +311,20 @@ function WS.createCloseFrame(reason) --Reason is a number, see the RFC
 	packet:WriteByte(0x80+data_size)
 	WS.writeMask(packet,mask)
 	if(reason) then
-		WS.writeDataEncoded({3,232+reason-1000}) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
+		WS.writeDataEncoded(packet,{3,232+reason-1000},mask) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
 	end
 	return packet
 end
 
 function WS:createDataFrame(data)
-	local data_size = #data --Data size must be in bytes
+	local data_size
+	if(data) then
+		data_size = #data
+	else
+		data_size = 0
+	end
+
+
 	local mask = WS.createMask()
 	if(data_size>=127) then print("too large, unsupported right now!!") end
 
@@ -290,7 +332,9 @@ function WS:createDataFrame(data)
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
 	packet:WriteByte(0x80+data_size) --mask+data size
 	WS.writeMask(packet,mask)
-	WS.writeDataEncoded(packet,data,mask)
+	if(data) then
+		WS.writeDataEncoded(packet,data,mask)
+	end
 
 
 	return packet
@@ -315,7 +359,14 @@ function WS.verifyhandshake(message)
 	return true
 end
 
-function WS.error(msg)
+function WS.findOpcode(message)
+	for k,v in pairs(WS.OPCODES) do
+		if(message==v) then return k end
+	end
+	WS.error("No opcode found for "..message)
+end
+
+function WS.Error(msg)
 	ErrorNoHalt("\nWEBSOCKET ERROR\n"..msg.."\n\n")
 end
 
@@ -335,6 +386,30 @@ concommand.Add("ws_test",function()
 	gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
 	gsocket:connect()
 end)
+
+local AB_URL = "hunternl.no-ip.org" //Autobahn ip and port
+local AB_PORT = 4175
+
+concommand.Add("ws_case",function(ply,cmd,args)
+	print(gsocket.state)
+	if(gsocket) then
+		gsocket:close()
+	end
+
+	gsocket = WS.Create(AB_URL.."/runCase?case="..args[1].."&agent=gmod_13",AB_PORT)
+	gsocket.echo = true
+	gsocket:connect()
+end)
+
+concommand.Add("ws_updatereports",function(ply,cmd,args)
+	if(gsocket) then
+		gsocket:close()
+	end
+
+	gsocket = WS.Create(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
+	gsocket:connect()
+end)
+
 
 concommand.Add("ws_close",function()
 	if(gsocket) then
