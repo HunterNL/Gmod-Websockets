@@ -20,6 +20,7 @@ WS.OPCODES.OPCODE_CNX_CLOSE 	= 0x8
 WS.OPCODES.OPCODE_PING			= 0x9
 WS.OPCODES.OPCODE_PONG			= 0xA
 
+
 local function toBitsLSB(num)
 	local t={}
     while num>0 do
@@ -40,109 +41,42 @@ local function toBitsMSB(num,bits)
     return table.concat(t)
 end
 
-function WS.parseUrl(url)
-	local ret = {}
-	ret.path = "/"
+function WS.Create(url,port)
+	local self = setmetatable({},WS)
 
-	local protocolIndex = string.find(url,"://")
-	if (protocolIndex && protocolIndex > -1) then
-		ret.protocol = string.sub(url,0,protocolIndex+2)
-		url = string.Right(url,#url-protocolIndex-2)
-	end
+	self.state = "CONNECTING"
 
-	local pathindex = string.find(url,"/")
-	if (pathindex && pathindex > -1) then
-		ret.host = string.sub(url,1,pathindex-1)
-		ret.path = string.sub(url,pathindex)
-	else
-		ret.host = url
-	end
+	self.port = port
+	self.url = url
 
-	return ret;
-end
+	local url_info = WS.parseUrl(url)
 
-function WS:connectCallback(socket,connected,ip,port)
-	if not connected then
-		print("Could not connect to "..self.host..":"..self.port)
-		return false
-	end
-	print("Connected!")
+	self.path = url_info.path or "/"
+	self.host = url_info.host
+	self.httphost = self.host .. ":" .. self.port
+	self.protocol = url_info.protocol
 
-	self:sendHTTPHandShake() --Send the HTTP handshake
-	self.bClient:ReceiveUntil("\r\n\r\n") --And await the server's
-end
+	self.bClient = BromSock();
 
-function WS:sentCallback(socket,length)
-	if(self.state=="CLOSING" && !self.closeInitByClient) then
-		--self.bClient:Close() --Start timeout here
-		self.state = "CLOSED"
-		print("Closed websocket connection")
-	end
-	print("Sent "..length.." bytes")
-end
+	self.bClient:SetCallbackConnect(function(socket,connected,IP,port)
+		self:connectCallback(socket,connected,IP,port)
+	end)
 
-function WS:disconnectCallback(socket)
-	print("BROMSOCK CLOSED")
-end
-
-function WS:prepareToReceive()
-	print("Preparing to receive next frame")
-	self.current_message = {}
-	self.current_message.receiveState = "HEADER"
-	self.bClient:Receive(2)
-end
-
-function WS:readHeader(packet)
-	message = packet:ReadByte(1)
-	print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
-	if message > 127 then
-		self.current_message.FIN = true
-		self.current_message.opcode = message-128
-	else
-		self.current_message.FIN = false
-		self.current_message.opcode = message
-	end
-
-	message = packet:ReadByte(1)
-	print("MASK/LEN: "..toBitsMSB(message,8))
-
-	--if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
-		--self.state = "CLOSING"
-	--end
-
-	if message>127 then
-		self.current_message.mask_enabled = true
-		self.current_message.payload_length = message-128
-	else
-		self.current_message.mask_enabled = false
-		self.current_message.payload_length = message
-	end
-
-	if(self.current_message.payload_length==126) then
-		self.current_message.payload_length_size = 2
-	elseif(self.current_message.payload_length==127) then
-		self.current_message.payload_length_size = 8
-	else
-		self.current_message.payload_length_size = 0
-	end
-
-	--print("MASK: "..(mask_enabled and "True" or "False"))
-	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
-end
+	self.bClient:SetCallbackSend(function(socket,length)
+		self:sentCallback(socket,length)
+	end)
 
 
-function WS:handleHTTPHandshake(packet)
-	httphandshake = packet:ReadStringAll()
-	if(!WS.verifyhandshake(httphandshake)) then
-		return false
-	end
+	self.bClient:SetCallbackReceive(function(socket,packet)
+		self:receiveCallback(socket,packet)
+	end)
 
-	print("Received valid HTTP handshake")
-	self.state = "OPEN"
-	self:prepareToReceive()
+	self.bClient:SetCallbackDisconnect(function(socket)
+		self:disconnectCallback(socket)
+	end)
 
-	--local packet = self:createDataFrame("tigers are pretty cool")
-	--self.bClient:Send(packet,true)
+
+	return self
 end
 
 function WS:receiveCallback(socket,packet)
@@ -198,7 +132,139 @@ function WS:receiveCallback(socket,packet)
 	end
 end
 
-function WS:onCloseMessage()
+function WS:createDataFrame(data)
+	local data_size
+	if(data) then
+		data_size = #data
+	else
+		data_size = 0
+	end
+
+
+	local mask = WS.createMask()
+	if(data_size>=127) then print("too large, unsupported right now!!") end
+
+	local packet = BromPacket()
+	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
+	packet:WriteByte(0x80+data_size) --mask+data size
+	WS.writeMask(packet,mask)
+	if(data) then
+		WS.writeDataEncoded(packet,data,mask)
+	end
+
+
+	return packet
+end
+
+function WS:connectCallback(socket,connected,ip,port)
+	if not connected then
+		print("Could not connect to "..self.host..":"..self.port)
+		return false
+	end
+	print("Connected!")
+
+	self:sendHTTPHandShake() --Send the HTTP handshake
+	self.bClient:ReceiveUntil("\r\n\r\n") --And await the server's
+end
+
+function WS:sentCallback(socket,length)
+	if(self.state=="CLOSING" && !self.closeInitByClient) then
+		--self.bClient:Close() --Start timeout here
+		self.state = "CLOSED"
+		print("Closed websocket connection")
+	end
+	print("Sent "..length.." bytes")
+end
+
+function WS:disconnectCallback(socket)
+	print("BROMSOCK CLOSED")
+end
+
+function WS:readHeader(packet)
+	message = packet:ReadByte(1)
+	print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
+	if message > 127 then
+		self.current_message.FIN = true
+		self.current_message.opcode = message-128
+	else
+		self.current_message.FIN = false
+		self.current_message.opcode = message
+	end
+
+	message = packet:ReadByte(1)
+	print("MASK/LEN: "..toBitsMSB(message,8))
+
+	--if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
+		--self.state = "CLOSING"
+	--end
+
+	if message>127 then
+		self.current_message.mask_enabled = true
+		self.current_message.payload_length = message-128
+	else
+		self.current_message.mask_enabled = false
+		self.current_message.payload_length = message
+	end
+
+	if(self.current_message.payload_length==126) then
+		self.current_message.payload_length_size = 2
+	elseif(self.current_message.payload_length==127) then
+		self.current_message.payload_length_size = 8
+	else
+		self.current_message.payload_length_size = 0
+	end
+
+	--print("MASK: "..(mask_enabled and "True" or "False"))
+	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
+end
+
+function WS:sendHTTPHandShake()
+	local packet = BromPacket()
+
+	--packet:WriteLine("GET "..(self.protocol or "")..self.host..self.path.." HTTP/1.1" )
+	packet:WriteLine("GET "..self.path.." HTTP/1.1" )
+	packet:WriteLine("Host: ".. self.httphost )
+
+	packet:WriteLine("Connection: Upgrade")
+	packet:WriteLine("Upgrade: websocket")
+
+	packet:WriteLine("Sec-WebSocket-Version: 13")
+	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode("1234567890abcdef"))
+
+	packet:WriteLine("") --Empty line to finish request
+
+	self.bClient:Send(packet,true)
+end
+
+function WS:handleHTTPHandshake(packet)
+	httphandshake = packet:ReadStringAll()
+	if(!WS.verifyhandshake(httphandshake)) then
+		return false
+	end
+
+	print("Received valid HTTP handshake")
+	self.state = "OPEN"
+	self:prepareToReceive()
+
+	--local packet = self:createDataFrame("tigers are pretty cool")
+	--self.bClient:Send(packet,true)
+end
+
+function WS:prepareToReceive()
+	print("Preparing to receive next frame")
+	self.current_message = {}
+	self.current_message.receiveState = "HEADER"
+	self.bClient:Receive(2)
+end
+
+function WS:isActive()
+	return self.state != "CLOSED"
+end
+
+
+
+
+function WS:onCloseMessage() --Handle frame with close opdoe
 	print("Handling close message")
 	if(self.state=="CLOSING") then
 		self.state="CLOSED"
@@ -212,7 +278,7 @@ function WS:onCloseMessage()
 	end
 end
 
-function WS:OnMessageEnd()
+function WS:OnMessageEnd() --End of frame
 	local msg = self.current_message
 	PrintTable(msg)
 	print("PAYLOAD: ".. (msg.payload or "None"))
@@ -229,43 +295,6 @@ function WS:OnMessageEnd()
 	end
 end
 
-function WS.Create(url,port)
-	local self = setmetatable({},WS)
-
-	self.state = "CONNECTING"
-
-	self.port = port
-	self.url = url
-
-	local url_info = WS.parseUrl(url)
-
-	self.path = url_info.path or "/"
-	self.host = url_info.host
-	self.httphost = self.host .. ":" .. self.port
-	self.protocol = url_info.protocol
-
-	self.bClient = BromSock();
-
-	self.bClient:SetCallbackConnect(function(socket,connected,IP,port)
-		self:connectCallback(socket,connected,IP,port)
-	end)
-
-	self.bClient:SetCallbackSend(function(socket,length)
-		self:sentCallback(socket,length)
-	end)
-
-
-	self.bClient:SetCallbackReceive(function(socket,packet)
-		self:receiveCallback(socket,packet)
-	end)
-
-	self.bClient:SetCallbackDisconnect(function(socket)
-		self:disconnectCallback(socket)
-	end)
-
-
-	return self
-end
 
 function WS:connect()
 	self.bClient:Connect(self.host,self.port)
@@ -320,23 +349,7 @@ function WS.writeDataEncoded(packet,data,mask)
 	end
 end
 
-function WS:sendHTTPHandShake()
-	local packet = BromPacket()
 
-	--packet:WriteLine("GET "..(self.protocol or "")..self.host..self.path.." HTTP/1.1" )
-	packet:WriteLine("GET "..self.path.." HTTP/1.1" )
-	packet:WriteLine("Host: ".. self.httphost )
-
-	packet:WriteLine("Connection: Upgrade")
-	packet:WriteLine("Upgrade: websocket")
-
-	packet:WriteLine("Sec-WebSocket-Version: 13")
-	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode("1234567890abcdef"))
-
-	packet:WriteLine("") --Empty line to finish request
-
-	self.bClient:Send(packet,true)
-end
 
 function WS.createCloseFrame(reason) --Reason is a number, see the RFC
 	local packet = BromPacket()
@@ -349,30 +362,6 @@ function WS.createCloseFrame(reason) --Reason is a number, see the RFC
 	if(reason) then
 		WS.writeDataEncoded(packet,{3,232+reason-1000},mask) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
 	end
-	return packet
-end
-
-function WS:createDataFrame(data)
-	local data_size
-	if(data) then
-		data_size = #data
-	else
-		data_size = 0
-	end
-
-
-	local mask = WS.createMask()
-	if(data_size>=127) then print("too large, unsupported right now!!") end
-
-	local packet = BromPacket()
-	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
-	packet:WriteByte(0x80+data_size) --mask+data size
-	WS.writeMask(packet,mask)
-	if(data) then
-		WS.writeDataEncoded(packet,data,mask)
-	end
-
-
 	return packet
 end
 
@@ -406,8 +395,25 @@ function WS.Error(msg)
 	ErrorNoHalt("\nWEBSOCKET ERROR\n"..msg.."\n\n")
 end
 
-function WS:isActive()
-	return self.state != "CLOSED"
+function WS.parseUrl(url)
+	local ret = {}
+	ret.path = "/"
+
+	local protocolIndex = string.find(url,"://")
+	if (protocolIndex && protocolIndex > -1) then
+		ret.protocol = string.sub(url,0,protocolIndex+2)
+		url = string.Right(url,#url-protocolIndex-2)
+	end
+
+	local pathindex = string.find(url,"/")
+	if (pathindex && pathindex > -1) then
+		ret.host = string.sub(url,1,pathindex-1)
+		ret.path = string.sub(url,pathindex)
+	else
+		ret.host = url
+	end
+
+	return ret;
 end
 
 concommand.Add("ws_test",function()
