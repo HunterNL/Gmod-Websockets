@@ -73,7 +73,7 @@ function WS:connectCallback(socket,connected,ip,port)
 end
 
 function WS:sentCallback(socket,length)
-	if(self.state=="CLOSING") then
+	if(self.state=="CLOSING" && !self.closeInitByClient) then
 		--self.bClient:Close() --Start timeout here
 		self.state = "CLOSED"
 		print("Closed websocket connection")
@@ -81,7 +81,12 @@ function WS:sentCallback(socket,length)
 	print("Sent "..length.." bytes")
 end
 
+function WS:disconnectCallback(socket)
+	print("BROMSOCK CLOSED")
+end
+
 function WS:prepareToReceive()
+	print("Preparing to receive next frame")
 	self.current_message = {}
 	self.current_message.receiveProgress = 0
 	self.bClient:Receive(2)
@@ -113,57 +118,62 @@ function WS:readHeader(packet)
 		self.current_message.payload_length = message
 	end
 
-	print("MASK: "..(mask_enabled and "True" or "False"))
-	print("PAYLOAD LENGTH "..self.current_message.payload_length)
+	--print("MASK: "..(mask_enabled and "True" or "False"))
+	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
 	self.current_message.receiveProgress = 2
 end
 
+
+function WS:handleHTTPHandshake(packet)
+	httphandshake = packet:ReadStringAll()
+	if(!WS.verifyhandshake(httphandshake)) then
+		return false
+	end
+
+	print("Received valid HTTP handshake")
+	self.state = "OPEN"
+	self:prepareToReceive()
+
+	--local packet = self:createDataFrame("tigers are pretty cool")
+	--self.bClient:Send(packet,true)
+end
+
 function WS:receiveCallback(socket,packet)
-	print("receiving ".. packet:InSize() .." bytes")
-	local message
+	local msg = self.current_message
+	print("\n\nRECEIVING, ".. packet:InSize() .." bytes in buffer")
 
-	if self.state == "CONNECTING" then
-		--message = packet:ReadStringAll():Trim()
-		httphandshake = packet:ReadStringAll()
-		if(!WS.verifyhandshake(httphandshake)) then
-			return false
-		end
-
-		print("Received valid HTTP handshake, Sending dummy frame")
-		self.state = "CONNECTED"
-		self:prepareToReceive()
-
-		--local packet = self:createDataFrame("tigers are pretty cool")
-		--self.bClient:Send(packet,true)
+	if (self.state == "CONNECTING") then
+		self:handleHTTPHandshake(packet)
 	else
-		--If we haven't started receiving yet, receive just the first 2 bytes
-		if(self.current_message.receiveProgress==0) then
+		if(msg.receiveProgress==0) then
+			print("READING HEADER")
 			self:readHeader(packet)
 
-			if(self.current_message.payload_length>0) then
-				self.bClient:Receive(self.current_message.payload_length) --Sometimes crashes?
+			if(msg.payload_length>0) then
+				print("Reading payload, length: "..msg.payload_length)
+				self.bClient:Receive(msg.payload_length) --Sometimes crashes?
 			else
 				self:OnMessageEnd()
 			end
 		else
-			--Else receive the payload
-			--[[if(self.current_message.opcode==WS.OPCODES.OPCODE_TEXT_FRAME) then
-				self.current_message.payload = packet:ReadStringAll()
-			elseif (self.current_message.opcode==WS.OPCODES.OPCODE_CNX_CLOSE) then
-				self.current_message.close = {
-					code = packet:ReadUShort(),
-					reason = packet:ReadStringAll()
-				}
-			else
-				print("Unknow opcode "..self.current_message.opcode .. WS.findOpcode(self.current_message.opcode))
-			end
-			]]--
-			self.current_message.payload = packet:ReadStringAll()
-
+			msg.payload = packet:ReadStringAll()
 			self:OnMessageEnd()
 		end
 	end
+end
 
+function WS:onCloseMessage()
+	print("Handling close message")
+	if(self.state=="CLOSING") then
+		self.state="CLOSED"
+		print("Websocket connection closed after response from server") --TODO Start timeout and kill bromsock
+
+	elseif(self.state=="OPEN") then
+		self.state="CLOSING"
+		self:sendCloseFrame(1000)
+	else
+		WS.Error("Close message received in invalid socket state "..self.state)
+	end
 end
 
 function WS:OnMessageEnd()
@@ -172,26 +182,8 @@ function WS:OnMessageEnd()
 	print("OPCODE:"..msg.opcode.." "..WS.findOpcode(msg.opcode))
 
 	if(msg.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
-
-		if(self.state=="CLOSING") then
-			self.state="CLOSED"
-			print("Websocket connection closed after response from server")
-
-		elseif(self.state=="CONNECTED") then
-			self.state="CLOSING as commanded by server"
-			if(msg.payload_length>0) then
-				print("REMOTE CLOSE CLODE "..msg.payload)
-			else
-				print("NO CLOSE CODE?!")
-			end
-			self:sendCloseFrame(tonumber(msg.payload))
-
-		else
-			WS.Error("Message received in invalid socket state "..self.state)
-		end
-
+		self:onCloseMessage()
 	else
-
 		if(self.echo) then
 			self:send(msg.payload)
 		end
@@ -230,6 +222,10 @@ function WS.Create(url,port)
 		self:receiveCallback(socket,packet)
 	end)
 
+	self.bClient:SetCallbackDisconnect(function(socket)
+		self:disconnectCallback(socket)
+	end)
+
 
 	return self
 end
@@ -244,7 +240,10 @@ function WS:send(data)
 end
 
 function WS:close(reason) --For client initiated clossing
-	if(self.state=="CONNECTED") then
+	if(self.state=="OPEN") then
+		print("Currently open, setting state to CLOSING and sending close frame")
+		self.state="CLOSING"
+		self.closeInitByClient = true;
 		self:sendCloseFrame(1000)
 	else
 		WS.Error("Tried to close while in invalid socket state "..self.state)
@@ -370,6 +369,9 @@ function WS.Error(msg)
 	ErrorNoHalt("\nWEBSOCKET ERROR\n"..msg.."\n\n")
 end
 
+function WS:isActive()
+	return self.state != "CLOSED"
+end
 
 concommand.Add("ws_test",function()
 
@@ -379,11 +381,12 @@ concommand.Add("ws_test",function()
 
 	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
 	--gsocket = WS.Create("echo.websocket.org/?encoding=text",80)
-	--gsocket = WS.Create("ws://echo.websocket.org/",80)
+	gsocket = WS.Create("ws://echo.websocket.org/",80)
 	--gsocket = WS.Create("roundtable.servebeer.com",11155)
 	--gsocket = WS.Create("192.168.1.123",9001)
 	--gsocket = WS.Create("hunternl.no-ip.org",4175)
-	gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
+	--gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
+	gsocket.echo = false
 	gsocket:connect()
 end)
 
@@ -391,8 +394,7 @@ local AB_URL = "hunternl.no-ip.org" //Autobahn ip and port
 local AB_PORT = 4175
 
 concommand.Add("ws_case",function(ply,cmd,args)
-	print(gsocket.state)
-	if(gsocket) then
+	if(gsocket&&gsocket:isActive()) then
 		gsocket:close()
 	end
 
@@ -402,7 +404,7 @@ concommand.Add("ws_case",function(ply,cmd,args)
 end)
 
 concommand.Add("ws_updatereports",function(ply,cmd,args)
-	if(gsocket) then
+	if(gsocket&&gsocket:isActive()) then
 		gsocket:close()
 	end
 
@@ -412,7 +414,7 @@ end)
 
 
 concommand.Add("ws_close",function()
-	if(gsocket) then
+	if(gsocket&&gsocket:isActive()) then
 		gsocket:close()
 	end
 end)
