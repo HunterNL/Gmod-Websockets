@@ -87,7 +87,6 @@ function WS:receiveCallback(socket,packet)
 		self:handleHTTPHandshake(packet)
 	else
 		local msg = self.current_message
-		PrintTable(msg)
 
 		if(msg.receiveState=="HEADER") then
 			print("READING HEADER")
@@ -108,8 +107,17 @@ function WS:receiveCallback(socket,packet)
 		if(msg.receiveState=="PAYLOAD_LENGTH") then
 			if(msg.payload_length_size==2) then
 				msg.payload_length = (bit.lshift(packet:ReadByte(),8)+packet:ReadByte())
+			elseif(msg.payload_length_size==8) then
+				local i
+				local len
+				for i=1,7 do
+					len = packet:ReadByte()
+					len = bit.lshift(len,8)
+				end
+				len = len + packet:ReadByte()
+				msg.payload_length = len
 			else
-				msg.payload_length = packet:ReadULong()
+				WS.Error("Unknown payload length size")
 			end
 			print("Extended payload length:"..msg.payload_length)
 			self.bClient:Receive(msg.payload_length)
@@ -132,22 +140,92 @@ function WS:receiveCallback(socket,packet)
 	end
 end
 
+function WS.readBytes(packet,n) --read n bytes of data from packet
+	local res = 0
+	local i
+	for i in 1,n do
+		res = bit.lshift(res,8) + packet:ReadByte()
+	end
+	return res
+end
+
+function WS.WriteBytes(packet,data,n) --writes n bytes of data to packet
+	--todo
+end
+
+function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its in the same byte as size
+	--Needs a nice rewrite... already
+	local byte
+	local short
+	local long
+	local mask = 0x80
+
+	if(data_size<126) then
+		byte = data_size
+	elseif (data_size==126) then
+		print("Data size is 126, writing short")
+		byte=126
+		short=126
+	elseif (data_size==127) then
+		byte=126
+		short=data_size
+	elseif (data_size>127 && data_size<65536) then
+		byte=126
+		short=data_size
+	elseif(data_size>=65536) then --Check for too big, 2^64
+		byte=127
+		long=data_size
+	end
+
+	print(packet:OutPos())
+	print("Writing payload size: "..byte)
+	packet:WriteByte(mask+byte) --mask+data size
+	print(packet:OutPos())
+
+	if(short) then --Extended payload length
+		print("Packetsize (short):"..short)
+		print(packet:OutPos())
+		--packet:WriteUShort(bit.bswap(short))
+		--packet:WriteUShort(short)
+		packet:WriteByte(bit.rshift(short,8))
+		packet:WriteByte(short)
+		print(packet:OutPos())
+	end
+
+	if(long) then --Extended payload length
+		print("Packetsize (long):"..long)
+		print(packet:OutPos())
+		--packet:WriteULong(long)
+		local i
+		for i=1,7 do
+			packet:WriteByte(bit.rshift(long,8*i))
+		end
+		packet:WriteByte(long)
+
+
+		print(packet:OutPos())
+	end
+
+
+end
+
 function WS:createDataFrame(data)
+	local packet = BromPacket()
 	local data_size
+
+	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
+
 	if(data) then
 		data_size = #data
 	else
 		data_size = 0
 	end
 
+	WS.writeDataSize(packet,true,data_size)
 
 	local mask = WS.createMask()
-	if(data_size>=127) then print("too large, unsupported right now!!") end
-
-	local packet = BromPacket()
-	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
-	packet:WriteByte(0x80+data_size) --mask+data size
 	WS.writeMask(packet,mask)
+
 	if(data) then
 		WS.writeDataEncoded(packet,data,mask)
 	end
@@ -280,7 +358,6 @@ end
 
 function WS:OnMessageEnd() --End of frame
 	local msg = self.current_message
-	PrintTable(msg)
 	print("PAYLOAD: ".. (msg.payload or "None"))
 	print("OPCODE:"..msg.opcode.." "..WS.findOpcode(msg.opcode))
 
