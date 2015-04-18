@@ -88,7 +88,7 @@ end
 function WS:prepareToReceive()
 	print("Preparing to receive next frame")
 	self.current_message = {}
-	self.current_message.receiveProgress = 0
+	self.current_message.receiveState = "HEADER"
 	self.bClient:Receive(2)
 end
 
@@ -118,9 +118,16 @@ function WS:readHeader(packet)
 		self.current_message.payload_length = message
 	end
 
+	if(self.current_message.payload_length==126) then
+		self.current_message.payload_length_size = 2
+	elseif(self.current_message.payload_length==127) then
+		self.current_message.payload_length_size = 8
+	else
+		self.current_message.payload_length_size = 0
+	end
+
 	--print("MASK: "..(mask_enabled and "True" or "False"))
 	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
-	self.current_message.receiveProgress = 2
 end
 
 
@@ -139,24 +146,53 @@ function WS:handleHTTPHandshake(packet)
 end
 
 function WS:receiveCallback(socket,packet)
-	local msg = self.current_message
+
 	print("\n\nRECEIVING, ".. packet:InSize() .." bytes in buffer")
 
 	if (self.state == "CONNECTING") then
 		self:handleHTTPHandshake(packet)
 	else
-		if(msg.receiveProgress==0) then
+		local msg = self.current_message
+		PrintTable(msg)
+
+		if(msg.receiveState=="HEADER") then
 			print("READING HEADER")
 			self:readHeader(packet)
 
-			if(msg.payload_length>0) then
-				print("Reading payload, length: "..msg.payload_length)
-				self.bClient:Receive(msg.payload_length) --Sometimes crashes?
+			if(msg.payload_length==0) then
+				self:OnMessageEnd() --No data left, end the message
+			elseif(msg.payload_length_size>=2) then --Payload is oversized, receive the size bytes
+				msg.receiveState = "PAYLOAD_LENGTH"
+				self.bClient:Receive(msg.payload_length_size)
 			else
-				self:OnMessageEnd()
+				self.bClient:Receive(msg.payload_length) --Payload is small, just receive it
+				msg.receiveState = "PAYLOAD"
 			end
-		else
+			return
+		end
+
+		if(msg.receiveState=="PAYLOAD_LENGTH") then
+			if(msg.payload_length_size==2) then
+				msg.payload_length = (bit.lshift(packet:ReadByte(),8)+packet:ReadByte())
+			else
+				msg.payload_length = packet:ReadULong()
+			end
+			print("Extended payload length:"..msg.payload_length)
+			self.bClient:Receive(msg.payload_length)
+			msg.receiveState="PAYLOAD"
+			return
+		end
+
+		if(msg.receiveState=="PAYLOAD") then
 			msg.payload = packet:ReadStringAll()
+			--[[print("Actual payload size: "..#msg.payload)
+			local i
+			print("START")
+			for i=1,#msg.payload do
+				print(string.byte(msg.payload[i]))
+			end
+			print("end")
+			--]]
 			self:OnMessageEnd()
 		end
 	end
@@ -178,6 +214,7 @@ end
 
 function WS:OnMessageEnd()
 	local msg = self.current_message
+	PrintTable(msg)
 	print("PAYLOAD: ".. (msg.payload or "None"))
 	print("OPCODE:"..msg.opcode.." "..WS.findOpcode(msg.opcode))
 
@@ -362,7 +399,7 @@ function WS.findOpcode(message)
 	for k,v in pairs(WS.OPCODES) do
 		if(message==v) then return k end
 	end
-	WS.error("No opcode found for "..message)
+	WS.Error("No opcode found for "..message)
 end
 
 function WS.Error(msg)
