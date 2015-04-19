@@ -12,6 +12,7 @@ local fix = {} --Err, need this to to fix the problem where 2 functions call eac
 
 local function runCase(caseId)
 	local id = caseId or currentCase
+	print("RUNNING CASE "..id)
 	gsocket = WS.Create(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
 	gsocket.echo = true
 	gsocket:SetCallbackClose(fix.onClose)
@@ -67,6 +68,8 @@ concommand.Add("ws_updatereports",function(ply,cmd,args)
 	end
 
 	gsocket = WS.Create(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
+	gsocket.echo = false
+	autoAdvance = false
 	gsocket:connect()
 end)
 

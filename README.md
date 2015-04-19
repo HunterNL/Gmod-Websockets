@@ -4,6 +4,7 @@ Lua module to allow communication via websockets
 
 Requires [gm_bromsock](https://github.com/Bromvlieg/gm_bromsock)
 
-Being tested with [Autobahn test suite](http://autobahn.ws/testsuite/) (nowhere near passing though :))
+Being tested with [Autobahn test suite](http://autobahn.ws/testsuite/) (And passing 1 trough 5)
+
 
 :tiger2:
