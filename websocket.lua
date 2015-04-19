@@ -245,9 +245,22 @@ function WS:sentCallback(socket,length)
 	if(self.state=="CLOSING" && !self.closeInitByClient) then
 		--self.bClient:Close() --Start timeout here
 		self.state = "CLOSED"
-		print("Closed websocket connection")
+		self:OnClose()
 	end
 	print("Sent "..length.." bytes")
+end
+
+function WS:OnClose()
+	local closingside = "Server"
+	if (self.closeInitByClient) then
+		closingside = "Client"
+	end
+	print(closingside.." closed websocket connection")
+
+	if(WS.autoadvancecase && (WS.currentCase < WS.finalCase)) then
+		WS.currentCase=WS.currentCase+1
+		WS.RunCase()
+	end
 end
 
 function WS:disconnectCallback(socket)
@@ -351,13 +364,24 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 
 	if(self.state=="CLOSING") then
 		self.state="CLOSED"
+		self:OnClose()
 		print("Websocket connection closed after response from server") --TODO Start timeout and kill bromsock
 
 	elseif(self.state=="OPEN") then
 		self.state="CLOSING"
+		print("Websocket closing as commanded by server")
 		self:sendCloseFrame(1000)
 	else
 		WS.Error("Close message received in invalid socket state "..self.state)
+	end
+end
+
+function WS:onPing()
+	msg = self.current_message
+	if(msg.payload_length<126) then
+		self:send(msg.payload,WS.OPCODES.OPCODE_PONG)
+	else
+		self:ProtocolError(1002,"Pong payload too large ("..msg.payload_length..")")
 	end
 end
 
@@ -368,12 +392,22 @@ function WS:OnMessageEnd() --End of frame
 
 	if(msg.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
 		self:onCloseMessage()
-	else
+	elseif (msg.opcode == WS.OPCODES.OPCODE_PING) then
+		self:onPing()
+
+		self:prepareToReceive()
+	elseif (msg.opcode == WS.OPCODES.OPCODE_TEXT_FRAME or msg.opcode == WS.OPCODES.OPCODE_BINARY_FRAME) then
 		if(self.echo) then
 			self:send(msg.payload,msg.opcode)
 		end
 
 		self:prepareToReceive()
+	elseif (msg.opcode == WS.OPCODES.OPCODE_PONG) then
+		print("Got unwanted pong")
+		--self:ProtocolError(1002,"Unwanted pong")
+		self:prepareToReceive()
+	else
+		WS.Error("Invalid opcode received",msg)
 	end
 end
 
@@ -392,11 +426,16 @@ function WS:close(reason) --For client initiated clossing
 		print("Currently open, setting state to CLOSING and sending close frame")
 		self.state="CLOSING"
 		self.closeInitByClient = true;
-		self:sendCloseFrame(1000)
+		self:sendCloseFrame(reason or 1000) --TODO proper close reason
 	else
 		WS.Error("Tried to close while in invalid socket state "..self.state)
 	end
 
+end
+
+function WS:ProtocolError(code,reason)
+	print("Websocket Protocol Error: "..reason)
+	self:close(code)
 end
 
 function WS:sendCloseFrame(reason)
@@ -477,6 +516,9 @@ function WS.findOpcode(message)
 end
 
 function WS.Error(msg)
+	if(type(msg) == "table") then
+		PrintTable(msg)
+	end
 	ErrorNoHalt("\nWEBSOCKET ERROR\n"..msg.."\n\n")
 end
 
@@ -521,14 +563,29 @@ end)
 local AB_URL = "hunternl.no-ip.org" //Autobahn ip and port
 local AB_PORT = 4175
 
+
+function WS.RunCase(caseId)
+	local id = caseId or WS.currentCase
+	gsocket = WS.Create(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
+	gsocket.echo = true
+	gsocket:connect()
+end
+
 concommand.Add("ws_case",function(ply,cmd,args)
 	if(gsocket&&gsocket:isActive()) then
 		gsocket:close()
 	end
 
-	gsocket = WS.Create(AB_URL.."/runCase?case="..args[1].."&agent=gmod_13",AB_PORT)
-	gsocket.echo = true
-	gsocket:connect()
+	caseId = tonumber(args[1])
+	WS.RunCase(caseId)
+
+	if(#args==2) then
+		WS.currentCase = caseId
+		WS.autoadvancecase = true
+		WS.finalCase= tonumber(args[2])
+	else
+		WS.autoadvancecase = false
+	end
 end)
 
 concommand.Add("ws_updatereports",function(ply,cmd,args)
