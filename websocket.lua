@@ -204,11 +204,12 @@ function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its i
 
 end
 
-function WS:createDataFrame(data)
+function WS:createDataFrame(data,opcode)
 	local packet = BromPacket()
 	local data_size
+	opcode = opcode or WS.OPCODES.OPCODE_TEXT_FRAME
 
-	packet:WriteByte(0x80+WS.OPCODES.OPCODE_TEXT_FRAME) --fin/reserved/opcode
+	packet:WriteByte(0x80+opcode) --fin/reserved/opcode
 
 	if(data) then
 		data_size = #data
@@ -369,7 +370,7 @@ function WS:OnMessageEnd() --End of frame
 		self:onCloseMessage()
 	else
 		if(self.echo) then
-			self:send(msg.payload)
+			self:send(msg.payload,msg.opcode)
 		end
 
 		self:prepareToReceive()
@@ -381,8 +382,8 @@ function WS:connect()
 	self.bClient:Connect(self.host,self.port)
 end
 
-function WS:send(data)
-	local packet = self:createDataFrame(data)
+function WS:send(data,opcode)
+	local packet = self:createDataFrame(data,opcode)
 	self.bClient:Send(packet,true)
 end
 
