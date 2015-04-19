@@ -91,3 +91,15 @@ concommand.Add("ws_sendsize",function(ply,cmd,args)
 		gsocket:send(string.rep("*",tonumber(args[1])))
 	end
 end)
+
+local function printData(data)
+	print(data)
+end
+
+concommand.Add("ws_casecount",function()
+	local getcountsocket
+ 	getcountsocket = WS.Create(AB_URL.."/getCaseCount",4175)
+
+	getcountsocket:SetCallbackReceive(printData)
+	getcountsocket:connect()
+end)

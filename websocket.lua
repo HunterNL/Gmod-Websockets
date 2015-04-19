@@ -46,6 +46,7 @@ function WS.Create(url,port)
 
 	self.state = "CONNECTING"
 	self.payload = ""
+	self.receiving_fragmented_payload = false
 	self.echo = false
 
 	self.port = port
@@ -328,7 +329,7 @@ function WS:sendHTTPHandShake()
 	packet:WriteLine("Upgrade: websocket")
 
 	packet:WriteLine("Sec-WebSocket-Version: 13")
-	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode("1234567890abcdef"))
+	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode("1234567890abcdef")) --TODO not be terrible
 
 	packet:WriteLine("") --Empty line to finish request
 
@@ -374,6 +375,17 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 	payload = msg.payload
 	local code
 	if(payload) then
+
+		if(msg.payload_length>=126) then
+			self:ProtocolError(false,1002,"Payload to large in close frame")
+			return
+		end
+
+		if(msg.payload_length==1) then
+			self:ProtocolError(false,1002,"Payload size is 1 in close frame")
+			return
+		end
+
 		code = (bit.lshift(string.byte(payload[1]),8)+string.byte(payload[2]))
 		print("Close payload:"..payload.." - ".. code)
 	end
@@ -443,14 +455,18 @@ function WS:OnMessageEnd() --End of frame
 	end
 
 	if (opcode == WS.OPCODES.OPCODE_TEXT_FRAME or opcode == WS.OPCODES.OPCODE_BINARY_FRAME) then
-		if(self.payload=="") then
-			self.payload = msg.payload
-			self.payloadType = msg.opcode
-		else
+		self.payload = msg.payload
+		self.payloadType = msg.opcode
+
+		if(self.receiving_fragmented_payload) then
 			self:ProtocolError(false,1002,"Continuation frames must have continue opcode")
+			return
 		end
+
 		if(msg.fin) then
 			self:OnFrameComplete()
+		else
+			self.receiving_fragmented_payload = true
 		end
 
 		self:prepareToReceive()
@@ -458,12 +474,12 @@ function WS:OnMessageEnd() --End of frame
 	end
 
 	if(opcode == WS.OPCODES.OPCODE_CONTINUE) then
-		print("payload: "..self.payload)
-		if(self.payload=="")  then
+		if(!self.receiving_fragmented_payload)  then
 			self:ProtocolError(false,1002,"Received continue opcode, yet nothing to continue")
 			return
 		end
-		self.payload = self.payload..msg.payload
+
+		self.payload = (self.payload or "")..(msg.payload or "")
 		if(msg.fin) then
 			self:OnFrameComplete()
 		end
@@ -492,6 +508,7 @@ function WS:OnFrameComplete()
 	end
 
 	self.payload = ""
+	self.receiving_fragmented_payload = false
 end
 
 function WS:connect()
@@ -549,8 +566,10 @@ function WS:ProtocolError(critical,code,reason)
 end
 
 function WS:sendCloseFrame(code)
-	local packet = WS.createCloseFrame(code)
-	self.bClient:Send(packet,true)
+	local packet = self:createCloseFrame(code)
+	if(packet!=nil) then
+		self.bClient:Send(packet,true)
+	end //If nil, packet call ProtocolError and din't return anything
 end
 
 function WS.createMask()
@@ -582,19 +601,50 @@ function WS.writeDataEncoded(packet,data,mask)
 	end
 end
 
+function WS.isValidCloseReason(reason)
+	//Optimize for common use first
+	if(reason>=1000 and reason <= 1003) then return true end
+
+	if (reason==1007) then return true end
+
+	if(reason==1004) then return false end
+	if(reason==1005) then return false end
+	if(reason==1006) then return false end
+
+	if(reason<1000) then return false end
+
+	if(reason>=1012 && reason < 3000) then
+		return false
+	end
+
+	if(reason>=3000 and reason < 5000) then
+		return true
+	end
+
+	print("Unverified close reason "..(reason or "NONE"))
+	return true --
+end
 
 
-function WS.createCloseFrame(reason) --Reason is a number, see the RFC
+function WS:createCloseFrame(reason) --Reason is a number, see the RFC
 	local packet = BromPacket()
 	local mask = WS.createMask()
 	local data_size = reason and 2 or 0
 
+	if(!WS.isValidCloseReason(reason)) then
+		self:ProtocolError(false,1002,"Invalid close code received: "..(reason or "NONE"))
+		return
+	end
+
 	packet:WriteByte(0x80+WS.OPCODES.OPCODE_CNX_CLOSE)
 	packet:WriteByte(0x80+data_size)
 	WS.writeMask(packet,mask)
+
+
 	if(reason) then
 		print(reason)
-		WS.writeDataEncoded(packet,{3,232+reason-1000},mask) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
+		--WS.writeDataEncoded(packet,{3,232+reason-1000},mask) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
+		WS.writeDataEncoded(packet,{bit.rshift(reason,8),reason},mask)
 	end
 	return packet
 end
