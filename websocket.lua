@@ -79,6 +79,18 @@ function WS.Create(url,port)
 	return self
 end
 
+function WS:SetCallbackConnected(func)
+	self.callbackClose = func
+end
+
+function WS:SetCallbackReceive(func)
+	self.callbackReceive = func
+end
+
+function WS:SetCallbackClose(func)
+	self.callbackClose = func
+end
+
 function WS:receiveCallback(socket,packet)
 
 	print("\n\nRECEIVING, ".. packet:InSize() .." bytes in buffer")
@@ -256,10 +268,8 @@ function WS:OnClose()
 		closingside = "Client"
 	end
 	print(closingside.." closed websocket connection")
-
-	if(WS.autoadvancecase && (WS.currentCase < WS.finalCase)) then
-		WS.currentCase=WS.currentCase+1
-		WS.RunCase()
+	if(self.callbackClose != nil) then
+		self.callbackClose(self.closeInitByClient or false)
 	end
 end
 
@@ -331,6 +341,11 @@ function WS:handleHTTPHandshake(packet)
 
 	print("Received valid HTTP handshake")
 	self.state = "OPEN"
+
+	if(self.callbackConnected) then
+		self.callbackConnected()
+	end
+
 	self:prepareToReceive()
 
 	--local packet = self:createDataFrame("tigers are pretty cool")
@@ -401,6 +416,10 @@ function WS:OnMessageEnd() --End of frame
 			self:send(msg.payload,msg.opcode)
 		end
 
+		if(self.callbackReceive) then
+			self.callbackReceive(msg.payload)
+		end
+
 		self:prepareToReceive()
 	elseif (msg.opcode == WS.OPCODES.OPCODE_PONG) then
 		print("Got unwanted pong")
@@ -422,8 +441,8 @@ function WS:send(data,opcode)
 end
 
 function WS:close(reason) --For client initiated clossing
-	if(self.state=="OPEN") then
-		print("Currently open, setting state to CLOSING and sending close frame")
+	if(self.state=="OPEN" or self.state=="CONNECTING") then
+		print("Currently "..self.state..", setting state to CLOSING and sending close frame")
 		self.state="CLOSING"
 		self.closeInitByClient = true;
 		self:sendCloseFrame(reason or 1000) --TODO proper close reason
@@ -542,76 +561,3 @@ function WS.parseUrl(url)
 
 	return ret;
 end
-
-concommand.Add("ws_test",function()
-
-	if gsocket then
-		gsocket:close()
-	end
-
-	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
-	--gsocket = WS.Create("echo.websocket.org/?encoding=text",80)
-	gsocket = WS.Create("ws://echo.websocket.org/",80)
-	--gsocket = WS.Create("roundtable.servebeer.com",11155)
-	--gsocket = WS.Create("192.168.1.123",9001)
-	--gsocket = WS.Create("hunternl.no-ip.org",4175)
-	--gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
-	gsocket.echo = false
-	gsocket:connect()
-end)
-
-local AB_URL = "hunternl.no-ip.org" //Autobahn ip and port
-local AB_PORT = 4175
-
-
-function WS.RunCase(caseId)
-	local id = caseId or WS.currentCase
-	gsocket = WS.Create(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
-	gsocket.echo = true
-	gsocket:connect()
-end
-
-concommand.Add("ws_case",function(ply,cmd,args)
-	if(gsocket&&gsocket:isActive()) then
-		gsocket:close()
-	end
-
-	caseId = tonumber(args[1])
-	WS.RunCase(caseId)
-
-	if(#args==2) then
-		WS.currentCase = caseId
-		WS.autoadvancecase = true
-		WS.finalCase= tonumber(args[2])
-	else
-		WS.autoadvancecase = false
-	end
-end)
-
-concommand.Add("ws_updatereports",function(ply,cmd,args)
-	if(gsocket&&gsocket:isActive()) then
-		gsocket:close()
-	end
-
-	gsocket = WS.Create(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
-	gsocket:connect()
-end)
-
-
-concommand.Add("ws_close",function()
-	if(gsocket&&gsocket:isActive()) then
-		gsocket:close()
-	end
-end)
-
-concommand.Add("ws_send",function(ply,cmd,args,argsString)
-	if(gsocket) then
-		gsocket:send(argsString)
-	end
-end)
-
-concommand.Add("ws_sendsize",function(ply,cmd,args)
-	if(gsocket) then
-		gsocket:send(string.rep("*",tonumber(args[1])))
-	end
-end)
