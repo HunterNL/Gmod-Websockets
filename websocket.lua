@@ -12,6 +12,8 @@ then
 	WS.__index = WS
 end;
 
+WS.verbose = false --Debugging
+
 WS.OPCODES = {}
 WS.OPCODES.OPCODE_CONTINUE		= 0x0
 WS.OPCODES.OPCODE_TEXT_FRAME	= 0x1
@@ -47,7 +49,9 @@ function WS.Create(url,port)
 	self.state = "CONNECTING"
 	self.payload = ""
 	self.receiving_fragmented_payload = false
+
 	self.echo = false
+
 
 	self.port = port
 	self.url = url
@@ -88,7 +92,7 @@ function WS.Get(url,port,callback,data)
 		local socket = WS.Create(url,port)
 
 		local function onOpen()
-			socket:send(data or nil)
+			socket:Send(data or nil)
 		end
 
 		local function onReady(data)
@@ -103,7 +107,7 @@ function WS.Get(url,port,callback,data)
 		socket:SetCallbackConnected(onOpen)
 		socket:SetCallbackReceive(onReady)
 		socket:SetCallbackClose(onClose)
-		socket:connect()
+		socket:Connect()
 	end
 	innerscope()
 end
@@ -123,8 +127,9 @@ function WS:SetCallbackClose(func)
 end
 
 function WS:receiveCallback(socket,packet)
-
-	print("\n\nRECEIVING, ".. packet:InSize() .." bytes in buffer")
+	if(WS.verbose) then
+		print("\n\nRECEIVING, ".. packet:InSize() .." bytes in buffer")
+	end
 
 	if (self.state == "CONNECTING") then
 		self:handleHTTPHandshake(packet)
@@ -213,31 +218,26 @@ function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its i
 	if(data_size<126) then
 		byte = data_size
 	elseif (data_size==126) then
-		print("Data size is 126, writing short")
 		byte=126
 		short=126
 	elseif (data_size > 126 && data_size < 65536) then
-		print("Data size >126 and <65536, writing short")
 		byte=126
 		short=data_size
 	elseif(data_size>=65536&&data_size<=4294967295) then --Check for too big, 2^64
-		print("Data >=65536 writing long")
 		byte=127
 		long=data_size
 	else
 		WS.Error("Payload too large") --TODO handle better/lift limitation
 	end
 
-	print("Writing payload size: "..byte)
+	if (WS.verbose) then print("Writing payload size: "..data_size) end
 	packet:WriteByte(mask+byte) --mask+data size
 
 	if(short) then --Extended payload length
-		print("Packetsize (short):"..short)
 		WS.WriteNumber(packet,short,2)
 	end
 
 	if(long) then --Extended payload length
-		print("Packetsize (long):"..long)
 		WS.WriteNumber(packet,0,4) --TODO Figure out lua int size properly and make this work
 		WS.WriteNumber(packet,long,4)
 	end
@@ -276,9 +276,11 @@ function WS:connectCallback(socket,connected,ip,port)
 		print("Could not connect to "..self.host..":"..self.port)
 		return false
 	end
-	print("Connected!")
+	if(WS.verbose) then
+		print("Connected!")
+	end
 
-	self:sendHTTPHandShake() --Send the HTTP handshake
+	self:SendHTTPHandShake() --Send the HTTP handshake
 	self.bClient:ReceiveUntil("\r\n\r\n") --And await the server's
 end
 
@@ -286,7 +288,9 @@ function WS:sentCallback(socket,length)
 	if(self.state=="CLOSING" && !self.closeInitByClient) then
 		self:close(0,true)
 	end
-	print("Sent "..length.." bytes")
+	if(WS.verbose) then
+		print("Sent "..length.." bytes")
+	end
 end
 
 function WS:OnClose()
@@ -294,14 +298,21 @@ function WS:OnClose()
 	if (self.closeInitByClient) then
 		closingside = "Client"
 	end
-	print(closingside.." closed websocket connection")
+
+	if(WS.verbose) then
+		print(closingside.." closed websocket connection")
+	end
+
 	if(isfunction(self.callbackClose)) then
 		self.callbackClose(self.closeInitByClient or false)
 	end
 end
 
 function WS:disconnectCallback(socket)
-	print("BROMSOCK CLOSED")
+	if(WS.verbose) then
+		print("BROMSOCK CLOSED")
+	end
+
 	if(self.state!="CLOSED") then
 		self.state="closed"
 		self:OnClose()
@@ -346,7 +357,7 @@ function WS:readHeader(packet)
 	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
 end
 
-function WS:sendHTTPHandShake()
+function WS:SendHTTPHandShake()
 	local packet = BromPacket()
 
 	--packet:WriteLine("GET "..(self.protocol or "")..self.host..self.path.." HTTP/1.1" )
@@ -370,7 +381,7 @@ function WS:handleHTTPHandshake(packet)
 		return false
 	end
 
-	print("Received valid HTTP handshake")
+	if(WS.verbose) then print("Received valid HTTP handshake") end
 	self.state = "OPEN"
 
 	if(isfunction(self.callbackConnected)) then
@@ -384,7 +395,10 @@ function WS:handleHTTPHandshake(packet)
 end
 
 function WS:prepareToReceive()
-	print("Preparing to receive next frame")
+	if(WS.verbose) then
+		print("Preparing to receive next frame")
+	end
+
 	self.current_message = {}
 	self.current_message.receiveState = "HEADER"
 	self.bClient:Receive(2)
@@ -398,7 +412,6 @@ end
 
 
 function WS:onCloseMessage() --Handle frame with close opdoe
-	print("Handling close message")
 	local msg = self.current_message
 	local payload = msg.payload
 	local code
@@ -415,7 +428,9 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 		end
 
 		code = (bit.lshift(string.byte(payload[1]),8)+string.byte(payload[2]))
-		print("Close payload:"..payload.." - ".. code)
+		if(WS.verbose) then
+			print("Close payload:"..payload.." - ".. code)
+		end
 	end
 
 	if(self.closeInitByClient) then
@@ -432,7 +447,7 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 	elseif(self.state=="OPEN") then
 		self.state="CLOSING"
 		print("Websocket closing as commanded by server")
-		self:sendCloseFrame(1000)
+		self:SendCloseFrame(1000)
 	else
 		WS.Error("Close message received in invalid socket state "..self.state)
 	end
@@ -451,15 +466,17 @@ function WS:onPing()
 		return
 	end
 
-	self:send(msg.payload,WS.OPCODES.OPCODE_PONG)
+	self:Send(msg.payload,WS.OPCODES.OPCODE_PONG)
 	self:prepareToReceive()
 end
 
 function WS:OnMessageEnd() --End of frame
 	local msg = self.current_message
 	local opcode = msg.opcode
-	print("PAYLOAD: ".. (msg.payload or "None"))
-	print("OPCODE:"..opcode.." "..(WS.findOpcode(opcode) or "Invalid opcode"))
+	if(WS.verbose) then
+		print("PAYLOAD: ".. (msg.payload or "None"))
+		print("OPCODE:"..opcode.." "..(WS.findOpcode(opcode) or "Invalid opcode"))
+	end
 
 	if(opcode > 15) then
 		self:ProtocolError(true,1002,"Reserved bits must be 0")
@@ -528,7 +545,7 @@ end
 
 function WS:OnFrameComplete()
 	if(self.echo) then
-		self:send(self.payload,self.payloadType)
+		self:Send(self.payload,self.payloadType)
 	end
 
 	if(isfunction(self.callbackReceive)) then
@@ -539,16 +556,16 @@ function WS:OnFrameComplete()
 	self.receiving_fragmented_payload = false
 end
 
-function WS:connect()
+function WS:Connect()
 	self.bClient:Connect(self.host,self.port)
 end
 
-function WS:send(data,opcode)
+function WS:Send(data,opcode)
 	if(self.state=="OPEN") then
 		local packet = self:createDataFrame(data,opcode)
 		self.bClient:Send(packet,true)
 	else
-		print("Cannot send message in current state "..self.state)
+		print("Cannot send message in current state "..self.state.."\nUse the onOpen callback")
 	end
 end
 --[[
@@ -561,7 +578,7 @@ function WS:close(code,immidiate) --For client initiated clossing
 		self.closeInitByClient = true;
 
 		if(self.closeInitByClient) then
-			self:sendCloseFrame(code)
+			self:SendCloseFrame(code)
 			self:prepareToReceive()
 		end
 	else
@@ -579,7 +596,7 @@ function WS:close(code,quick)
 		self.bClient:Close()
 	else
 		self.state = "CLOSING"
-		self:sendCloseFrame(code)
+		self:SendCloseFrame(code)
 		self:prepareToReceive()
 		timer.Simple(1,function() self:close(code,true) end)
 	end
@@ -597,7 +614,7 @@ function WS:ProtocolError(critical,code,reason)
 	self:close(code,false)
 end
 
-function WS:sendCloseFrame(code)
+function WS:SendCloseFrame(code)
 	local packet = self:createCloseFrame(code)
 	if(packet!=nil) then
 		self.bClient:Send(packet,true)
