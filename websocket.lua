@@ -82,8 +82,36 @@ function WS.Create(url,port)
 	return self
 end
 
+function WS.Get(url,port,callback,data)
+	function innerscope() --hack(?) to create a new scope (and thus new sockets and callbacks) for every call to WS.Get
+		--Not sure how this plays with garbage collection though :s
+		local socket = WS.Create(url,port)
+
+		local function onOpen()
+			socket:send(data or nil)
+		end
+
+		local function onReady(data)
+			callback(data)
+			socket:close()
+		end
+
+		local function onClose()
+			--Perform cleanup, maybe?
+		end
+
+		socket:SetCallbackConnected(onOpen)
+		socket:SetCallbackReceive(onReady)
+		socket:SetCallbackClose(onClose)
+		socket:connect()
+	end
+	innerscope()
+end
+
+
+
 function WS:SetCallbackConnected(func)
-	self.callbackClose = func
+	self.callbackConnected = func
 end
 
 function WS:SetCallbackReceive(func)
@@ -267,7 +295,7 @@ function WS:OnClose()
 		closingside = "Client"
 	end
 	print(closingside.." closed websocket connection")
-	if(self.callbackClose != nil) then
+	if(isfunction(self.callbackClose)) then
 		self.callbackClose(self.closeInitByClient or false)
 	end
 end
@@ -282,7 +310,7 @@ end
 
 function WS:readHeader(packet)
 	message = packet:ReadByte(1)
-	print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
+	--print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
 	if message > 127 then
 		self.current_message.fin = true
 		self.current_message.opcode = message-128
@@ -292,7 +320,7 @@ function WS:readHeader(packet)
 	end
 
 	message = packet:ReadByte(1)
-	print("MASK/LEN: "..toBitsMSB(message,8))
+	--print("MASK/LEN: "..toBitsMSB(message,8))
 
 	--if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
 		--self.state = "CLOSING"
@@ -337,7 +365,7 @@ function WS:sendHTTPHandShake()
 end
 
 function WS:handleHTTPHandshake(packet)
-	httphandshake = packet:ReadStringAll()
+	local httphandshake = packet:ReadStringAll()
 	if(!WS.verifyhandshake(httphandshake)) then
 		return false
 	end
@@ -345,7 +373,7 @@ function WS:handleHTTPHandshake(packet)
 	print("Received valid HTTP handshake")
 	self.state = "OPEN"
 
-	if(self.callbackConnected) then
+	if(isfunction(self.callbackConnected)) then
 		self.callbackConnected()
 	end
 
@@ -371,8 +399,8 @@ end
 
 function WS:onCloseMessage() --Handle frame with close opdoe
 	print("Handling close message")
-	msg = self.current_message
-	payload = msg.payload
+	local msg = self.current_message
+	local payload = msg.payload
 	local code
 	if(payload) then
 
@@ -412,7 +440,7 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 end
 
 function WS:onPing()
-	msg = self.current_message
+	local msg = self.current_message
 	if(msg.payload_length>=126) then
 		self:ProtocolError(false,1002,"Ping payload too large ("..msg.payload_length..")")
 		return
@@ -503,7 +531,7 @@ function WS:OnFrameComplete()
 		self:send(self.payload,self.payloadType)
 	end
 
-	if(self.callbackReceive) then
+	if(isfunction(self.callbackReceive)) then
 		self.callbackReceive(self.payload)
 	end
 
@@ -516,8 +544,12 @@ function WS:connect()
 end
 
 function WS:send(data,opcode)
-	local packet = self:createDataFrame(data,opcode)
-	self.bClient:Send(packet,true)
+	if(self.state=="OPEN") then
+		local packet = self:createDataFrame(data,opcode)
+		self.bClient:Send(packet,true)
+	else
+		print("Cannot send message in current state "..self.state)
+	end
 end
 --[[
 function WS:close(code,immidiate) --For client initiated clossing
