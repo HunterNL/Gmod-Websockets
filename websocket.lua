@@ -106,9 +106,10 @@ function WS:receiveCallback(socket,packet)
 
 		if(msg.receiveState=="PAYLOAD_LENGTH") then
 			if(msg.payload_length_size==2) then
-				msg.payload_length = (bit.lshift(packet:ReadByte(),8)+packet:ReadByte())
+				--msg.payload_length = (bit.lshift(packet:ReadByte(),8)+packet:ReadByte())
+				msg.payload_length = WS.readNumber(packet,2)
 			elseif(msg.payload_length_size==8) then
-				local i
+				--[[local i
 				local len
 				for i=1,7 do
 					len = packet:ReadByte()
@@ -116,6 +117,8 @@ function WS:receiveCallback(socket,packet)
 				end
 				len = len + packet:ReadByte()
 				msg.payload_length = len
+				--]]
+				msg.payload_length = WS.readNumber(packet,8)
 			else
 				WS.Error("Unknown payload length size")
 			end
@@ -140,17 +143,21 @@ function WS:receiveCallback(socket,packet)
 	end
 end
 
-function WS.readBytes(packet,n) --read n bytes of data from packet
+function WS.readNumber(packet,n) --read n bytes of data from packet
 	local res = 0
 	local i
-	for i in 1,n do
+	for i= 1,n do
 		res = bit.lshift(res,8) + packet:ReadByte()
 	end
 	return res
 end
 
-function WS.WriteBytes(packet,data,n) --writes n bytes of data to packet
-	--todo
+function WS.WriteNumber(packet,data,n) --writes n bytes of data to packet
+	local i
+	local byte
+	for i=1,n do
+		packet:WriteByte(bit.ror(data,(n-i)*8))
+	end
 end
 
 function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its in the same byte as size
@@ -166,15 +173,16 @@ function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its i
 		print("Data size is 126, writing short")
 		byte=126
 		short=126
-	elseif (data_size==127) then
+	elseif (data_size > 126 && data_size < 65536) then
+		print("Data size >126 and <65536, writing short")
 		byte=126
 		short=data_size
-	elseif (data_size>127 && data_size<65536) then
-		byte=126
-		short=data_size
-	elseif(data_size>=65536) then --Check for too big, 2^64
+	elseif(data_size>=65536&&data_size<=4294967295) then --Check for too big, 2^64
+		print("Data >=65536 writing long")
 		byte=127
 		long=data_size
+	else
+		WS.Error("Payload too large") --TODO handle better/lift limitation
 	end
 
 	print(packet:OutPos())
@@ -184,26 +192,13 @@ function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its i
 
 	if(short) then --Extended payload length
 		print("Packetsize (short):"..short)
-		print(packet:OutPos())
-		--packet:WriteUShort(bit.bswap(short))
-		--packet:WriteUShort(short)
-		packet:WriteByte(bit.rshift(short,8))
-		packet:WriteByte(short)
-		print(packet:OutPos())
+		WS.WriteNumber(packet,short,2)
 	end
 
 	if(long) then --Extended payload length
 		print("Packetsize (long):"..long)
-		print(packet:OutPos())
-		--packet:WriteULong(long)
-		local i
-		for i=1,7 do
-			packet:WriteByte(bit.rshift(long,8*i))
-		end
-		packet:WriteByte(long)
-
-
-		print(packet:OutPos())
+		WS.WriteNumber(packet,0,4) --TODO Figure out lua int size properly and make this work
+		WS.WriteNumber(packet,long,4)
 	end
 
 
@@ -344,6 +339,15 @@ end
 
 function WS:onCloseMessage() --Handle frame with close opdoe
 	print("Handling close message")
+	msg = self.current_message
+	if(msg.payload) then
+		print("Close payload:"..msg.payload.." - "..
+		(bit.lshift(string.byte(msg.payload[1]),8)+string.byte(msg.payload[2]))
+		)
+	end
+
+
+
 	if(self.state=="CLOSING") then
 		self.state="CLOSED"
 		print("Websocket connection closed after response from server") --TODO Start timeout and kill bromsock
@@ -417,11 +421,14 @@ end
 
 function WS.writeDataEncoded(packet,data,mask)
 	local i
+
+	print("pre: "..packet:OutPos())
 	for i = 1,#data do
 		local byte = data[i]
 		if(type(byte)=="string") then
 			byte = string.byte(byte)
 		end
+
 		packet:WriteByte(bit.bxor(byte,mask[((i-1)%4)+1]))
 	end
 end
@@ -542,5 +549,11 @@ end)
 concommand.Add("ws_send",function(ply,cmd,args,argsString)
 	if(gsocket) then
 		gsocket:send(argsString)
+	end
+end)
+
+concommand.Add("ws_sendsize",function(ply,cmd,args)
+	if(gsocket) then
+		gsocket:send(string.rep("*",tonumber(args[1])))
 	end
 end)
