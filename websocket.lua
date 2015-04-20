@@ -243,7 +243,7 @@ function WS:createDataFrame(data,opcode)
 
 	WS.writeDataSize(packet,true,data_size)
 
-	local mask = WS.createMask()
+	local mask = WS.randomByteArray(4)
 	WS.writeMask(packet,mask)
 
 	if(data) then
@@ -351,7 +351,7 @@ function WS:SendHTTPHandShake()
 	packet:WriteLine("Upgrade: websocket")
 
 	packet:WriteLine("Sec-WebSocket-Version: 13")
-	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode("1234567890abcdef")) --TODO not be terrible
+	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode(WS.randomString(16))) --TODO not be terrible
 
 	packet:WriteLine("") --Empty line to finish request
 
@@ -604,13 +604,22 @@ function WS:SendCloseFrame(code)
 	end //If nil, packet call ProtocolError and din't return anything
 end
 
-function WS.createMask()
-	local mask = {}
+function WS.randomString(len)
+	local s = ""
 	local i
-	for i=1,4 do
-		mask[i]=math.random(255)
+	for i=1,len do
+		s = s .. string.char(math.random(97, 122))
 	end
-	return mask
+	return s
+end
+
+function WS.randomByteArray(len)
+	local tbl = {}
+	local i
+	for i=1,len do
+		tbl[i]=math.random(255)
+	end
+	return tbl
 end
 
 function WS.writeMask(packet,mask)
@@ -660,7 +669,7 @@ end
 
 function WS:createCloseFrame(reason) --Reason is a number, see the RFC
 	local packet = BromPacket()
-	local mask = WS.createMask()
+	local mask = WS.randomByteArray(4)
 	local data_size = reason and 2 or 0
 
 	if(!WS.isValidCloseReason(reason)) then
