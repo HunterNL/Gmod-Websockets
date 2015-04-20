@@ -154,18 +154,8 @@ function WS:receiveCallback(socket,packet)
 
 		if(msg.receiveState=="PAYLOAD_LENGTH") then
 			if(msg.payload_length_size==2) then
-				--msg.payload_length = (bit.lshift(packet:ReadByte(),8)+packet:ReadByte())
 				msg.payload_length = WS.readNumber(packet,2)
 			elseif(msg.payload_length_size==8) then
-				--[[local i
-				local len
-				for i=1,7 do
-					len = packet:ReadByte()
-					len = bit.lshift(len,8)
-				end
-				len = len + packet:ReadByte()
-				msg.payload_length = len
-				--]]
 				msg.payload_length = WS.readNumber(packet,8)
 			else
 				WS.Error("Unknown payload length size")
@@ -178,14 +168,6 @@ function WS:receiveCallback(socket,packet)
 
 		if(msg.receiveState=="PAYLOAD") then
 			msg.payload = packet:ReadStringAll()
-			--[[print("Actual payload size: "..#msg.payload)
-			local i
-			print("START")
-			for i=1,#msg.payload do
-				print(string.byte(msg.payload[i]))
-			end
-			print("end")
-			--]]
 			self:OnMessageEnd()
 		end
 	end
@@ -209,37 +191,38 @@ function WS.WriteNumber(packet,data,n) --writes n bytes of data to packet
 end
 
 function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its in the same byte as size
-	--Needs a nice rewrite... already
-	local byte
-	local short
-	local long
+	local payload_size_basic
+	local payload_size_extended
+
 	local mask = 0x80
+	local max_size = 2^64
 
 	if(data_size<126) then
-		byte = data_size
-	elseif (data_size==126) then
-		byte=126
-		short=126
-	elseif (data_size > 126 && data_size < 65536) then
-		byte=126
-		short=data_size
-	elseif(data_size>=65536&&data_size<=4294967295) then --Check for too big, 2^64
-		byte=127
-		long=data_size
+		payload_size_basic = data_size
+	elseif (data_size >= 126 && data_size < 65536) then
+		payload_size_basic=126
+		payload_size_extended=data_size
+	elseif(data_size>=65536&&data_size<max_size) then--4294967296) then --Check for too big, 2^64
+		payload_size_basic=127
+		payload_size_extended=data_size
 	else
-		WS.Error("Payload too large") --TODO handle better/lift limitation
+		WS.Error("Payload too large") --TODO handle better/lift limitation --TODO throw protocolerror instead
 	end
 
 	if (WS.verbose) then print("Writing payload size: "..data_size) end
-	packet:WriteByte(mask+byte) --mask+data size
 
-	if(short) then --Extended payload length
-		WS.WriteNumber(packet,short,2)
-	end
+	packet:WriteByte(mask+payload_size_basic) --mask+data size
+	if(payload_size_extended==nil) then return end
 
-	if(long) then --Extended payload length
-		WS.WriteNumber(packet,0,4) --TODO Figure out lua int size properly and make this work
-		WS.WriteNumber(packet,long,4)
+	if(payload_size_extended<65536) then --Extended payload length
+		WS.WriteNumber(packet,payload_size_extended,2)
+	else
+		if(payload_size_extended>=(2^32)) then
+			WR.WriteNumber(packet,payload_size_extended,8)
+		else
+			WS.WriteNumber(packet,0,4) --TODO Figure out lua int size properly and make this work
+			WS.WriteNumber(packet,payload_size_extended,4)
+		end
 	end
 
 
@@ -286,7 +269,7 @@ end
 
 function WS:sentCallback(socket,length)
 	if(self.state=="CLOSING" && !self.closeInitByClient) then
-		self:close(0,true)
+		self:Close(0,true)
 	end
 	if(WS.verbose) then
 		print("Sent "..length.." bytes")
@@ -401,7 +384,7 @@ function WS:prepareToReceive()
 
 	self.current_message = {}
 	self.current_message.receiveState = "HEADER"
-	self.bClient:Receive(2)
+	self.bClient:Receive(2) --Receive the header (first 2 bytes)
 end
 
 function WS:isActive()
@@ -434,9 +417,9 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 	end
 
 	if(self.closeInitByClient) then
-		self:close(code or payload,true)
+		self:Close(code or payload,true)
 	else
-		self:close(code or payload)
+		self:Close(code or payload)
 	end
 	--[[
 	if(self.state=="CLOSING") then
@@ -588,7 +571,7 @@ function WS:close(code,immidiate) --For client initiated clossing
 end
 --]]
 
-function WS:close(code,quick)
+function WS:Close(code,quick)
 	code = code or 1000
 	if(quick) then
 		self.state = "CLOSED"
@@ -598,7 +581,7 @@ function WS:close(code,quick)
 		self.state = "CLOSING"
 		self:SendCloseFrame(code)
 		self:prepareToReceive()
-		timer.Simple(1,function() self:close(code,true) end)
+		timer.Simple(1,function() self:Close(code,true) end)
 	end
 end
 
@@ -611,7 +594,7 @@ function WS:ProtocolError(critical,code,reason)
 	--else
 	print("Websocket protocol error: "..reason)
 	self.closeInitByClient = true
-	self:close(code,false)
+	self:Close(code,false)
 end
 
 function WS:SendCloseFrame(code)

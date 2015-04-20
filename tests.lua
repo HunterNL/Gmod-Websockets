@@ -16,12 +16,11 @@ local function runCase(caseId)
 	gsocket = WS.Create(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
 	gsocket.echo = true
 	gsocket:SetCallbackClose(fix.onClose)
-	gsocket:connect()
+	gsocket:Connect()
 end
 
 
 fix.onClose = function()
-	print("TEST - Onclose")
 	if(autoadvancecase && (currentCase < finalCase)) then
 		currentCase=currentCase+1
 		runCase()
@@ -30,7 +29,7 @@ end
 
 concommand.Add("ws_case",function(ply,cmd,args)
 	if(gsocket&&gsocket:isActive()) then
-		gsocket:close()
+		gsocket:Close()
 	end
 
 	caseId = tonumber(args[1])
@@ -48,7 +47,7 @@ end)
 concommand.Add("ws_test",function()
 
 	if gsocket then
-		gsocket:close()
+		gsocket:Close()
 	end
 
 	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
@@ -59,36 +58,36 @@ concommand.Add("ws_test",function()
 	--gsocket = WS.Create("hunternl.no-ip.org",4175)
 	--gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
 	gsocket.echo = false
-	gsocket:connect()
+	gsocket:Connect()
 end)
 
 concommand.Add("ws_updatereports",function(ply,cmd,args)
 	if(gsocket&&gsocket:isActive()) then
-		gsocket:close()
+		gsocket:Close()
 	end
 
 	gsocket = WS.Create(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
 	gsocket.echo = false
 	autoAdvance = false
-	gsocket:connect()
+	gsocket:Connect()
 end)
 
 
 concommand.Add("ws_close",function()
 	if(gsocket&&gsocket:isActive()) then
-		gsocket:close()
+		gsocket:Close()
 	end
 end)
 
 concommand.Add("ws_send",function(ply,cmd,args,argsString)
 	if(gsocket) then
-		gsocket:send(argsString)
+		gsocket:Send(argsString)
 	end
 end)
 
 concommand.Add("ws_sendsize",function(ply,cmd,args)
 	if(gsocket) then
-		gsocket:send(string.rep("*",tonumber(args[1])))
+		gsocket:Send(string.rep("*",tonumber(args[1])))
 	end
 end)
 
@@ -101,5 +100,5 @@ concommand.Add("ws_casecount",function()
  	getcountsocket = WS.Create(AB_URL.."/getCaseCount",4175)
 
 	getcountsocket:SetCallbackReceive(printData)
-	getcountsocket:connect()
+	getcountsocket:Connect()
 end)
