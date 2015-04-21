@@ -10,6 +10,12 @@ if
 then
 	WS = {}
 	WS.__index = WS
+
+	setmetatable(WS,{
+		__call = function(self,...)
+			return WS.Create(...) -- Set WS() to call WS.Create()
+		end
+	})
 end;
 
 WS.verbose = false --Debugging
@@ -22,17 +28,7 @@ WS.OPCODES.OPCODE_CNX_CLOSE 	= 0x8
 WS.OPCODES.OPCODE_PING			= 0x9
 WS.OPCODES.OPCODE_PONG			= 0xA
 
-
-local function toBitsLSB(num)
-	local t={}
-    while num>0 do
-        rest=math.fmod(num,2)
-        t[#t+1]=rest
-        num=(num-rest)/2
-    end
-    return table.concat(t)
-end
-
+--For debugging
 local function toBitsMSB(num,bits)
     bits = bits or select(2,math.frexp(num))
     local t={} -- will contain the bits
@@ -43,6 +39,8 @@ local function toBitsMSB(num,bits)
     return table.concat(t)
 end
 
+
+--Constructor
 function WS.Create(url,port)
 	local self = setmetatable({},WS)
 
@@ -50,7 +48,7 @@ function WS.Create(url,port)
 	self.payload = ""
 	self.receiving_fragmented_payload = false
 
-	self.echo = false
+	self.echo = false --Debugging/testing aid, set true to echo all text and binary frames back
 
 
 	self.port = port
@@ -63,29 +61,30 @@ function WS.Create(url,port)
 	self.httphost = self.host .. ":" .. self.port
 	self.protocol = url_info.protocol
 
-	self.bClient = BromSock();
+	self.bClient = BromSock(); --Get our own little socket
 
-	self.bClient:SetCallbackConnect(function(socket,connected,IP,port)
-		self:connectCallback(socket,connected,IP,port)
+	self.bClient:SetCallbackConnect(function(...)
+		self:connectCallback(...)
 	end)
 
-	self.bClient:SetCallbackSend(function(socket,length)
-		self:sentCallback(socket,length)
+	self.bClient:SetCallbackSend(function(...)
+		self:sentCallback(...)
 	end)
 
 
-	self.bClient:SetCallbackReceive(function(socket,packet)
-		self:receiveCallback(socket,packet)
+	self.bClient:SetCallbackReceive(function(...)
+		self:receiveCallback(...)
 	end)
 
-	self.bClient:SetCallbackDisconnect(function(socket)
-		self:disconnectCallback(socket)
+	self.bClient:SetCallbackDisconnect(function(...)
+		self:disconnectCallback(...)
 	end)
 
 
 	return self
 end
 
+--High level utility function for just sending and/or retrieving a single frame
 function WS.Get(url,port,callback,data)
 	function innerscope() --hack(?) to create a new scope (and thus new sockets and callbacks) for every call to WS.Get
 		--Not sure how this plays with garbage collection though :s
@@ -126,22 +125,23 @@ function WS:SetCallbackClose(func)
 	self.callbackClose = func
 end
 
+--Callback fired by the socket
 function WS:receiveCallback(socket,packet)
 	if(WS.verbose) then
 		print("\n\nRECEIVING, ".. packet:InSize() .." bytes in buffer")
 	end
 
-	if (self.state == "CONNECTING") then
+	if (self.state == "CONNECTING") then --If we haven't gotten the handshake yet, handle it
 		self:handleHTTPHandshake(packet)
-	else
+	else --Else asume its a regular frame
 		local msg = self.current_message
 
-		if(msg.receiveState=="HEADER") then
+		if(msg.receiveState=="HEADER") then --If we haven't gotten the header, asume this is the header
 			--print("READING HEADER")
 			self:readHeader(packet)
 
 			if(msg.payload_length==0) then
-				self:OnMessageEnd() --No data left, end the message
+				self:OnMessageEnd() --No payload, end the message
 			elseif(msg.payload_length_size>=2) then --Payload is oversized, receive the size bytes
 				msg.receiveState = "PAYLOAD_LENGTH"
 				self.bClient:Receive(msg.payload_length_size)
@@ -152,7 +152,7 @@ function WS:receiveCallback(socket,packet)
 			return
 		end
 
-		if(msg.receiveState=="PAYLOAD_LENGTH") then
+		if(msg.receiveState=="PAYLOAD_LENGTH") then --Receive the extra size bytes
 			if(msg.payload_length_size==2) then
 				msg.payload_length = WS.readNumber(packet,2)
 			elseif(msg.payload_length_size==8) then
@@ -166,7 +166,7 @@ function WS:receiveCallback(socket,packet)
 			return
 		end
 
-		if(msg.receiveState=="PAYLOAD") then
+		if(msg.receiveState=="PAYLOAD") then --Actually receive a payload
 			msg.payload = packet:ReadStringAll()
 			self:OnMessageEnd()
 		end
@@ -198,12 +198,12 @@ function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its i
 	local max_size = 2^64
 
 	if(data_size<126) then
-		payload_size_basic = data_size
+		payload_size_basic = data_size --Write just the payload lengt byte
 	elseif (data_size >= 126 && data_size < 65536) then
-		payload_size_basic=126
+		payload_size_basic=126 --Set payload size to 126 and set the next 2 bytes as length
 		payload_size_extended=data_size
 	elseif(data_size>=65536&&data_size<max_size) then--4294967296) then --Check for too big, 2^64
-		payload_size_basic=127
+		payload_size_basic=127 --Set payload size to 127 and set the next 8 bytes as length
 		payload_size_extended=data_size
 	else
 		WS.Error("Payload too large") --TODO handle better/lift limitation --TODO throw protocolerror instead
@@ -228,6 +228,8 @@ function WS.writeDataSize(packet,mask,data_size) --Also writes mask, since its i
 
 end
 
+--Creates a new data frame ready to send
+--TODO merge with createcloseframe
 function WS:createDataFrame(data,opcode)
 	local packet = BromPacket()
 	local data_size
@@ -243,7 +245,7 @@ function WS:createDataFrame(data,opcode)
 
 	WS.writeDataSize(packet,true,data_size)
 
-	local mask = WS.randomByteArray(4)
+	local mask = WS.randomByteArray(4) --Client to server traffic needs to be xor encoded
 	WS.writeMask(packet,mask)
 
 	if(data) then
@@ -254,8 +256,10 @@ function WS:createDataFrame(data,opcode)
 	return packet
 end
 
+--Callback from socket when initial connection is succesfulll or aborted
 function WS:connectCallback(socket,connected,ip,port)
 	if not connected then
+		--For connection errors, timeout, ect
 		print("Could not connect to "..self.host..":"..self.port)
 		return false
 	end
@@ -263,19 +267,21 @@ function WS:connectCallback(socket,connected,ip,port)
 		print("Connected!")
 	end
 
-	self:SendHTTPHandShake() --Send the HTTP handshake
-	self.bClient:ReceiveUntil("\r\n\r\n") --And await the server's
+	self:SendHTTPHandShake() --Send the HTTP handshake so we can start speaking websocket
+	self.bClient:ReceiveUntil("\r\n\r\n") --And await the server's handshake
 end
 
+--Socket callback after we sent a message
 function WS:sentCallback(socket,length)
-	if(self.state=="CLOSING" && !self.closeInitByClient) then
-		self:Close(0,true)
+	if(self.state=="CLOSING" && !self.closeInitByClient) then --If the server requested a close
+		self:Close(0,true) --Close our socket after sending our close frame
 	end
 	if(WS.verbose) then
 		print("Sent "..length.." bytes")
 	end
 end
 
+--Ran when connection is definitly closed
 function WS:OnClose()
 	local closingside = "Server"
 	if (self.closeInitByClient) then
@@ -286,49 +292,49 @@ function WS:OnClose()
 		print(closingside.." closed websocket connection")
 	end
 
+	--If callback is set, call the callback
 	if(isfunction(self.callbackClose)) then
 		self.callbackClose(self.closeInitByClient or false)
 	end
 end
 
+--Socket callback when disconnected
 function WS:disconnectCallback(socket)
 	if(WS.verbose) then
 		print("BROMSOCK CLOSED")
 	end
 
-	if(self.state!="CLOSED") then
-		self.state="closed"
+	if(self.state!="CLOSED") then --If we're not closed, make sure we're closed!
+		self.state="CLOSED"
 		self:OnClose()
 	end
 end
 
+--Read 2 bytes from given packet, this should be the header
 function WS:readHeader(packet)
-	message = packet:ReadByte(1)
+	message = packet:ReadByte(1) --read FIN(1),reserved bits(3) and opcode (4)
 	--print("FIN/RES/OPCODE: "..toBitsMSB(message,8))
-	if message > 127 then
-		self.current_message.fin = true
-		self.current_message.opcode = message-128
+
+	if message > 127 then --If first bit is set
+		self.current_message.fin = true -- packet is final fragment
+		self.current_message.opcode = message-128 --unset first bit
 	else
 		self.current_message.fin = false
 		self.current_message.opcode = message
 	end
+	--Invalid opcode checks are done in OnMessageEnd
 
 	message = packet:ReadByte(1)
-	--print("MASK/LEN: "..toBitsMSB(message,8))
 
-	--if(self.current_message.opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
-		--self.state = "CLOSING"
-	--end
-
-	if message>127 then
+	if message>127 then --If mask set
 		self.current_message.mask_enabled = true
-		self.current_message.payload_length = message-128
+		self.current_message.payload_length = message-128 --unset first bit
 	else
 		self.current_message.mask_enabled = false
 		self.current_message.payload_length = message
 	end
 
-	if(self.current_message.payload_length==126) then
+	if(self.current_message.payload_length==126) then --Set appropriate ammount of payload size bytes
 		self.current_message.payload_length_size = 2
 	elseif(self.current_message.payload_length==127) then
 		self.current_message.payload_length_size = 8
@@ -340,10 +346,11 @@ function WS:readHeader(packet)
 	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
 end
 
+
+--Sends the HTTP handshake
 function WS:SendHTTPHandShake()
 	local packet = BromPacket()
 
-	--packet:WriteLine("GET "..(self.protocol or "")..self.host..self.path.." HTTP/1.1" )
 	packet:WriteLine("GET "..self.path.." HTTP/1.1" )
 	packet:WriteLine("Host: ".. self.httphost )
 
@@ -351,32 +358,33 @@ function WS:SendHTTPHandShake()
 	packet:WriteLine("Upgrade: websocket")
 
 	packet:WriteLine("Sec-WebSocket-Version: 13")
-	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode(WS.randomString(16))) --TODO not be terrible
+	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode(WS.randomString(16)))
 
-	packet:WriteLine("") --Empty line to finish request
+	packet:WriteLine("") --Empty line to finish HTTP request
 
-	self.bClient:Send(packet,true)
+	self.bClient:Send(packet,true) --true means don't prepend payload size
 end
 
+--Handle http handshake, asumes packet is http handshake
 function WS:handleHTTPHandshake(packet)
 	local httphandshake = packet:ReadStringAll()
 	if(!WS.verifyhandshake(httphandshake)) then
-		return false
+		return false --If its invalid, abort --TODO: Close instead?
 	end
 
 	if(WS.verbose) then print("Received valid HTTP handshake") end
 	self.state = "OPEN"
 
+	--If callback is set, call it
 	if(isfunction(self.callbackConnected)) then
 		self.callbackConnected()
 	end
 
+	--Prepare to receive websocket frames
 	self:prepareToReceive()
-
-	--local packet = self:createDataFrame("tigers are pretty cool")
-	--self.bClient:Send(packet,true)
 end
 
+--Very important function, resets the message and waits untill there's a header to receive
 function WS:prepareToReceive()
 	if(WS.verbose) then
 		print("Preparing to receive next frame")
@@ -391,9 +399,7 @@ function WS:isActive()
 	return self.state != "CLOSED"
 end
 
-
-
-
+--Handler for close frames
 function WS:onCloseMessage() --Handle frame with close opdoe
 	local msg = self.current_message
 	local payload = msg.payload
@@ -416,29 +422,18 @@ function WS:onCloseMessage() --Handle frame with close opdoe
 		end
 	end
 
-	if(self.closeInitByClient) then
-		self:Close(code or payload,true)
-	else
-		self:Close(code or payload)
-	end
-	--[[
-	if(self.state=="CLOSING") then
-		self.state="CLOSED"
-		self:OnClose()
-		print("Websocket connection closed after response from server") --TODO Start timeout and kill bromsock
 
-	elseif(self.state=="OPEN") then
-		self.state="CLOSING"
-		print("Websocket closing as commanded by server")
-		self:SendCloseFrame(1000)
+	if(self.closeInitByClient) then --If we started closing
+		self:Close(code or payload,true) --Server awknowlaged our close, close right now
 	else
-		WS.Error("Close message received in invalid socket state "..self.state)
+		self:Close(code or payload) -- Server wants to start closing
 	end
-	--]]
 end
 
+--Ping message handler
 function WS:onPing()
 	local msg = self.current_message
+
 	if(msg.payload_length>=126) then
 		self:ProtocolError(false,1002,"Ping payload too large ("..msg.payload_length..")")
 		return
@@ -449,7 +444,7 @@ function WS:onPing()
 		return
 	end
 
-	self:Send(msg.payload,WS.OPCODES.OPCODE_PONG)
+	self:Send(msg.payload,WS.OPCODES.OPCODE_PONG) --Send pong with identical payload
 	self:prepareToReceive()
 end
 
@@ -461,27 +456,28 @@ function WS:OnMessageEnd() --End of frame
 		print("OPCODE:"..opcode.." "..(WS.findOpcode(opcode) or "Invalid opcode"))
 	end
 
-	if(opcode > 15) then
+	if(opcode > 15) then --Check if reversed bits are set
 		self:ProtocolError(true,1002,"Reserved bits must be 0")
 		return
 	end
 
 	if(opcode == WS.OPCODES.OPCODE_CNX_CLOSE) then
-		self:onCloseMessage()
+		self:onCloseMessage() --Handle close messages in seperate function
 		return
 	end
 
-	if(self.state!="OPEN") then
+	if(self.state!="OPEN") then --If we're not properly connected and we get a message, throw protocolerror
 		print("Unwanted message while not OPEN, current state is "..self.state)
 		self:ProtocolError(false,1002,"Unwanted message")
 		return
 	end
 
 	if (opcode == WS.OPCODES.OPCODE_PING) then
-		self:onPing()
+		self:onPing() --Reply to pings
 		return
 	end
 
+	--Main frame handler
 	if (opcode == WS.OPCODES.OPCODE_TEXT_FRAME or opcode == WS.OPCODES.OPCODE_BINARY_FRAME) then
 		self.payload = msg.payload
 		self.payloadType = msg.opcode
@@ -493,7 +489,7 @@ function WS:OnMessageEnd() --End of frame
 
 		if(msg.fin) then
 			self:OnFrameComplete()
-		else
+		else --If final frame in message, end, else note the message is fragmented
 			self.receiving_fragmented_payload = true
 		end
 
@@ -507,7 +503,7 @@ function WS:OnMessageEnd() --End of frame
 			return
 		end
 
-		self.payload = (self.payload or "")..(msg.payload or "")
+		self.payload = (self.payload or "")..(msg.payload or "") --very safely concatinate payloads
 		if(msg.fin) then
 			self:OnFrameComplete()
 		end
@@ -517,7 +513,7 @@ function WS:OnMessageEnd() --End of frame
 	end
 
 	if (opcode == WS.OPCODES.OPCODE_PONG) then
-		print("Got unwanted pong")
+		print("Got unwanted pong") --We shouldn't be getting pongs?
 		--self:ProtocolError(1002,"Unwanted pong")
 		self:prepareToReceive()
 		return
@@ -526,23 +522,27 @@ function WS:OnMessageEnd() --End of frame
 	self:ProtocolError(false,1002,"Invalid opcode "..(msg.opcode or "NONE")) --Instantly fail the connection for unknown opcodes
 end
 
+--When a message is complete, not called seperately for fragmented messages
 function WS:OnFrameComplete()
 	if(self.echo) then
 		self:Send(self.payload,self.payloadType)
 	end
 
+	--If application registered callback, call it
 	if(isfunction(self.callbackReceive)) then
 		self.callbackReceive(self.payload)
 	end
 
+	--And reset
 	self.payload = ""
 	self.receiving_fragmented_payload = false
 end
 
-function WS:Connect()
+function WS:Connect() --Just tell our underlying socket to connect
 	self.bClient:Connect(self.host,self.port)
 end
 
+--Application level send function, takes data and opcode for payload type
 function WS:Send(data,opcode)
 	if(self.state=="OPEN") then
 		local packet = self:createDataFrame(data,opcode)
@@ -551,26 +551,8 @@ function WS:Send(data,opcode)
 		print("Cannot send message in current state "..self.state.."\nUse the onOpen callback")
 	end
 end
---[[
-function WS:close(code,immidiate) --For client initiated clossing
-	code = code or 1000
-	print("Closing websocket... ("..code..")")
-	if(self.state=="OPEN" or self.state=="CONNECTING") then
-		print("Currently "..self.state..", setting state to CLOSING and sending close frame")
-		self.state="CLOSING"
-		self.closeInitByClient = true;
 
-		if(self.closeInitByClient) then
-			self:SendCloseFrame(code)
-			self:prepareToReceive()
-		end
-	else
-		WS.Error("Tried to close while in invalid socket state "..self.state)
-	end
-
-end
---]]
-
+--Application/internal level close function, takes error code (see RFC) and if we should close quickly (don't inform server)
 function WS:Close(code,quick)
 	code = code or 1000
 	if(quick) then
@@ -581,22 +563,18 @@ function WS:Close(code,quick)
 		self.state = "CLOSING"
 		self:SendCloseFrame(code)
 		self:prepareToReceive()
-		timer.Simple(1,function() self:Close(code,true) end)
+		timer.Simple(1,function() self:Close(code,true) end) --Timeout, in case server doesn't reply with close frame
 	end
 end
 
+--Used to raise an error and fail the connection
 function WS:ProtocolError(critical,code,reason)
-	--if(critical) then
-		--print("\nWEBSOCKET CRITICAL ERROR, dropping connection")
-		--self.state="CLOSED"
-		--self.closeInitByClient = true
-		--self.bClient:Close()
-	--else
 	print("Websocket protocol error: "..reason)
 	self.closeInitByClient = true
 	self:Close(code,false)
 end
 
+--Sends a close frame to the server
 function WS:SendCloseFrame(code)
 	local packet = self:createCloseFrame(code)
 	if(packet!=nil) then
@@ -604,6 +582,8 @@ function WS:SendCloseFrame(code)
 	end //If nil, packet call ProtocolError and din't return anything
 end
 
+
+--Helper to create Sec-WebSocket-Key
 function WS.randomString(len)
 	local s = ""
 	local i
@@ -613,6 +593,7 @@ function WS.randomString(len)
 	return s
 end
 
+--Helper to create mask
 function WS.randomByteArray(len)
 	local tbl = {}
 	local i
@@ -622,6 +603,7 @@ function WS.randomByteArray(len)
 	return tbl
 end
 
+--Helper to write the mask
 function WS.writeMask(packet,mask)
 	local i
 	for i=1,4 do
@@ -629,6 +611,7 @@ function WS.writeMask(packet,mask)
 	end
 end
 
+--Helper to write data encoded with given mask
 function WS.writeDataEncoded(packet,data,mask)
 	local i
 
@@ -642,15 +625,14 @@ function WS.writeDataEncoded(packet,data,mask)
 	end
 end
 
+--Helper to check for valid close reason
 function WS.isValidCloseReason(reason)
 	//Optimize for common use first
 	if(reason>=1000 and reason <= 1003) then return true end
 
 	if (reason==1007) then return true end
 
-	if(reason==1004) then return false end
-	if(reason==1005) then return false end
-	if(reason==1006) then return false end
+	if(reason>=1004 && reason <=1006) then return false end
 
 	if(reason<1000) then return false end
 
@@ -666,33 +648,34 @@ function WS.isValidCloseReason(reason)
 	return true --
 end
 
-
+--Creates a frame used to indicate a request to close the connection
 function WS:createCloseFrame(reason) --Reason is a number, see the RFC
 	local packet = BromPacket()
-	local mask = WS.randomByteArray(4)
-	local data_size = reason and 2 or 0
+	local mask = WS.randomByteArray(4) --Close frames still requir a masked payload
+	local data_size = reason and 2 or 0 --Payload is either 2 or 0
 
 	if(!WS.isValidCloseReason(reason)) then
 		self:ProtocolError(false,1002,"Invalid close code received: "..(reason or "NONE"))
 		return
 	end
 
-	packet:WriteByte(0x80+WS.OPCODES.OPCODE_CNX_CLOSE)
-	packet:WriteByte(0x80+data_size)
+	packet:WriteByte(0x80+WS.OPCODES.OPCODE_CNX_CLOSE) --Write FIN, RES and opcode
+	packet:WriteByte(0x80+data_size) --Write mask and data size
 	WS.writeMask(packet,mask)
 
+	if (WS.verbose) then print("Made close frame with reason "..(reason or "NONE")) end
 
-	if(reason) then
-		print(reason)
-		--WS.writeDataEncoded(packet,{3,232+reason-1000},mask) //Writes 2 bytes: 00000011 (768) and 11101XXX where X is 10XX in the close status code, see RFC
-		WS.writeDataEncoded(packet,{bit.rshift(reason,8),reason},mask)
+	if(reason) then --Reason is optional
+		WS.writeDataEncoded(packet,{bit.rshift(reason,8),reason},mask) //Writing encoded number over 2 bytes
 	end
 	return packet
 end
 
+
+--Verify if the HTTP handshake is valid
 function WS.verifyhandshake(message)
 	local msg = string.Explode(" ",message)
-	--PrintTable(msg)
+
 	if(msg[1]!="HTTP/1.1") then
 		WS.error("Invalid server reponse\nInvalid first header:"..msg[1])
 		print("Server response:"..message)
@@ -709,6 +692,7 @@ function WS.verifyhandshake(message)
 	return true
 end
 
+--For debugging, find the key for the opcode value
 function WS.findOpcode(message)
 	for k,v in pairs(WS.OPCODES) do
 		if(message==v) then return k end
@@ -716,6 +700,7 @@ function WS.findOpcode(message)
 	WS.Error("No opcode found for "..message)
 end
 
+--Throws a nice error into the console
 function WS.Error(msg)
 	if(type(msg) == "table") then
 		PrintTable(msg)
@@ -723,6 +708,7 @@ function WS.Error(msg)
 	ErrorNoHalt("\nWEBSOCKET ERROR\n"..msg.."\n\n")
 end
 
+--Helper to get usefull bits of data out of the URL
 function WS.parseUrl(url)
 	local ret = {}
 	ret.path = "/"
