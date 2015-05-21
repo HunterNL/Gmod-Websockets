@@ -1,10 +1,12 @@
 #Gmod Websockets
-####WIP, very rough, don't expect this to work yet
 Lua module to allow communication via websockets
 
 Requires [gm_bromsock](https://github.com/Bromvlieg/gm_bromsock)
 
-Being tested with [Autobahn test suite](http://autobahn.ws/testsuite/) (And passing 1 trough 5)
+Tested with [Autobahn test suite](http://autobahn.ws/testsuite/) 
 
+####Limitations
+* No UTF8 validity checks
+* Cannot send/receive payloads larger than 4MB 
 
 :tiger2:
