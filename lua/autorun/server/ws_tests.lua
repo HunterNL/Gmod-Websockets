@@ -6,6 +6,8 @@ local autoAdvance = false
 local currentCase = 0
 local finalCase = 0
 
+require("websocket")
+
 local fix = {} --Err, need this to to fix the problem where 2 functions call eachother
 --The useall fix where you just declare the local ahead of time doesn't work
 --Because of the callback :s
