@@ -6,7 +6,7 @@ local autoAdvance = false
 local currentCase = 0
 local finalCase = 0
 
-require("websocket")
+--require("websocket")
 
 local fix = {} --Err, need this to to fix the problem where 2 functions call eachother
 --The useall fix where you just declare the local ahead of time doesn't work
@@ -15,10 +15,10 @@ local fix = {} --Err, need this to to fix the problem where 2 functions call eac
 local function runCase(caseId)
 	local id = caseId or currentCase
 	print("RUNNING CASE "..id)
-	gsocket = WS.Create(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
+	gsocket = WS()
 	gsocket.echo = true
 	gsocket:SetCallbackClose(fix.onClose)
-	gsocket:Connect()
+	gsocket:Connect(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
 end
 
 
@@ -68,10 +68,10 @@ concommand.Add("ws_updatereports",function(ply,cmd,args)
 		gsocket:Close()
 	end
 
-	gsocket = WS.Create(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
+	gsocket = WS()
 	gsocket.echo = false
 	autoAdvance = false
-	gsocket:Connect()
+	gsocket:Connect(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
 end)
 
 
@@ -99,8 +99,8 @@ end
 
 concommand.Add("ws_casecount",function()
 	local getcountsocket
- 	getcountsocket = WS.Create(AB_URL.."/getCaseCount",4175)
+ 	getcountsocket = WS()
 
 	getcountsocket:SetCallbackReceive(printData)
-	getcountsocket:Connect()
+	getcountsocket:Connect(AB_URL.."/getCaseCount",4175)
 end)

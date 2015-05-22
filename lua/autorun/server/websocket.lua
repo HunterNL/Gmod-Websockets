@@ -42,25 +42,22 @@ end
 
 
 --Constructor
-function WS.Create(url,port)
+function WS.Create()
 	local self = setmetatable({},WS)
 
-	self.state = "CONNECTING"
+	self.state = "IDLE"
 	self.payload = ""
 	self.receiving_fragmented_payload = false
 
 	self.echo = false --Debugging/testing aid, set true to echo all text and binary frames back
 
+	self.clients = {} --Only used by server
 
-	self.port = port
-	self.url = url
 
-	local url_info = WS.parseUrl(url)
+	--self.port = port
+	--self.url = url
 
-	self.path = url_info.path or "/"
-	self.host = url_info.host
-	self.httphost = self.host .. ":" .. self.port
-	self.protocol = url_info.protocol
+
 
 	self.bClient = BromSock(); --Get our own little socket
 
@@ -81,15 +78,29 @@ function WS.Create(url,port)
 		self:disconnectCallback(...)
 	end)
 
+	self.bClient:SetCallbackAccept(function(...)
+		self:acceptCallback(...)
+	end)
+
 
 	return self
+end
+
+function WS.Listen(port)
+	if(self.isClient) then
+		error("Websocket client tried to listen(), a server function")
+	else
+		self.isServer = true
+	end
+	self.port = port
 end
 
 --High level utility function for just sending and/or retrieving a single frame
 function WS.Get(url,port,callback,data)
 	function innerscope() --hack(?) to create a new scope (and thus new sockets and callbacks) for every call to WS.Get
 		--Not sure how this plays with garbage collection though :s
-		local socket = WS.Create(url,port)
+		local socket = WS()
+		socket:Connect(url,port)
 
 		local function onOpen()
 			socket:Send(data or nil)
@@ -172,6 +183,14 @@ function WS:receiveCallback(socket,packet)
 			self:OnMessageEnd()
 		end
 	end
+end
+
+function WS:acceptCallback(server,client)
+	if(WS.verbose) then
+		print("Accepted connecting with client")
+	end
+	table.insert(self.clients,client)
+	server:Accept()
 end
 
 function WS.readNumber(packet,n) --read n bytes of data from packet
@@ -352,17 +371,20 @@ end
 function WS:SendHTTPHandShake()
 	local packet = BromPacket()
 
-	packet:WriteLine("GET "..self.path.." HTTP/1.1" )
-	packet:WriteLine("Host: ".. self.httphost )
+	if(self.isClient) then
+		packet:WriteLine("GET "..self.path.." HTTP/1.1" )
+		packet:WriteLine("Host: ".. self.httphost )
 
-	packet:WriteLine("Connection: Upgrade")
-	packet:WriteLine("Upgrade: websocket")
+		packet:WriteLine("Connection: Upgrade")
+		packet:WriteLine("Upgrade: websocket")
 
-	packet:WriteLine("Sec-WebSocket-Version: 13")
-	packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode(WS.randomString(16)))
+		packet:WriteLine("Sec-WebSocket-Version: 13")
+		packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode(WS.randomString(16)))
 
-	packet:WriteLine("") --Empty line to finish HTTP request
-
+		packet:WriteLine("") --Empty line to finish HTTP request
+	else
+		packet:WriteLine()
+	end
 	self.bClient:Send(packet,true) --true means don't prepend payload size
 end
 
@@ -397,7 +419,7 @@ function WS:prepareToReceive()
 end
 
 function WS:isActive()
-	return self.state != "CLOSED"
+	return (self.state != "CLOSED" and self.state !="IDLE")
 end
 
 --Handler for close frames
@@ -553,7 +575,27 @@ function WS:OnFrameComplete()
 	self.receiving_fragmented_payload = false
 end
 
-function WS:Connect() --Just tell our underlying socket to connect
+function WS:Connect(url,port) --Just tell our underlying socket to connect to given url/port
+	if(url==nil or port==nil) then
+		error("WS:Connect needs url and port arguments")
+	end
+
+	if(self.isServer) then
+		error("Websocket server tried to connect to another server")
+	else
+		self.isClient = true
+	end
+
+	self.port = port
+	local url_info = WS.parseUrl(url)
+
+	self.path = url_info.path or "/"
+	self.host = url_info.host
+	self.httphost = self.host .. ":" .. self.port
+	self.protocol = url_info.protocol
+
+	self.state = "CONNECTING"
+
 	self.bClient:Connect(self.host,self.port)
 end
 
@@ -583,6 +625,9 @@ function WS:Close(code)
 		self.state="CLOSING"
 		self:SendCloseFrame(code)
 		self:prepareToReceive()
+
+		if(WS.verbose) then print("CLOSING CONNECTION, state is now "..self.state) end
+
 		timer.Simple(WS.close_timeout,function()
 			self:Disconnect()
 		end)
@@ -601,7 +646,7 @@ function WS:Close(code)
 	end
 	]]
 
-	if(WS.verbose) then print("CLOSING CONNECTION, state is now "..self.state) end
+
 end
 
 --Used to raise an error and fail the connection
@@ -729,6 +774,9 @@ end
 
 --Helper to get usefull bits of data out of the URL
 function WS.parseUrl(url)
+	if (url==nil) then
+		error("No argument given to WS.ParseURL")
+	end
 	local ret = {}
 	ret.path = "/"
 
