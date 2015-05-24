@@ -15,7 +15,7 @@ local fix = {} --Err, need this to to fix the problem where 2 functions call eac
 local function runCase(caseId)
 	local id = caseId or currentCase
 	print("RUNNING CASE "..id)
-	gsocket = WS()
+	gsocket = WS.Client()
 	gsocket.echo = true
 	gsocket:SetCallbackClose(fix.onClose)
 	gsocket:Connect(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
@@ -54,13 +54,13 @@ concommand.Add("ws_test",function()
 
 	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
 	--gsocket = WS.Create("echo.websocket.org/?encoding=text",80)
-	gsocket = WS.Create("ws://echo.websocket.org/",80)
+	gsocket = WS.Client()
 	--gsocket = WS.Create("roundtable.servebeer.com",11155)
 	--gsocket = WS.Create("192.168.1.123",9001)
 	--gsocket = WS.Create("hunternl.no-ip.org",4175)
 	--gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
 	gsocket.echo = false
-	gsocket:Connect()
+	gsocket:Connect("ws://echo.websocket.org/",80)
 end)
 
 concommand.Add("ws_updatereports",function(ply,cmd,args)
@@ -68,7 +68,7 @@ concommand.Add("ws_updatereports",function(ply,cmd,args)
 		gsocket:Close()
 	end
 
-	gsocket = WS()
+	gsocket = WS.Client()
 	gsocket.echo = false
 	autoAdvance = false
 	gsocket:Connect(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
@@ -98,9 +98,17 @@ local function printData(data)
 end
 
 concommand.Add("ws_casecount",function()
-	local getcountsocket
- 	getcountsocket = WS()
+	local getcountsocket = WS()
 
 	getcountsocket:SetCallbackReceive(printData)
 	getcountsocket:Connect(AB_URL.."/getCaseCount",4175)
+end)
+
+concommand.Add("ws_listen",function()
+	if(gsocket) then
+		gsocket:Disconnect()
+	end
+
+	gsocket = WS.Client()
+	gsocket:Listen(4176)
 end)

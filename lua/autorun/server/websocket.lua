@@ -6,19 +6,31 @@ print("Websockets loaded")
 require( "bromsock" );
 
 if
-	not WS
+	not WS or true
 then
 	WS = {}
 	WS.__index = WS
 
+	WS.Client = {}
+	WS.Client.__index = WS.Client
+	setmetatable(WS.Client,{
+		__call = function(self,...)
+			return WS.Client.Create(...)
+		end,
+		__index = WS
+	})
+
+	WS.Server = {}
+	WS.Server.__index = WS.Server
+	setmetatable(WS.Server,{
+		__call = function(self,...)
+			return WS.Server.Create(...)
+		end,
+		__index = WS
+	})
+
 	WS.verbose = false --Debugging
 	WS.close_timeout = 1 -- Time to wait for a server close reply before just closing the socket
-
-	setmetatable(WS,{
-		__call = function(self,...)
-			return WS.Create(...) -- Set WS() to call WS.Create()
-		end
-	})
 end;
 
 WS.OPCODES = {}
@@ -40,10 +52,13 @@ local function toBitsMSB(num,bits)
     return table.concat(t)
 end
 
-
+--
 --Constructor
-function WS.Create()
-	local self = setmetatable({},WS)
+function WS.Client.Create()
+	local self = setmetatable({},WS.Client)
+	if(WS.verbose) then
+		print("Made new websocket")
+	end
 
 	self.state = "IDLE"
 	self.payload = ""
@@ -86,13 +101,22 @@ function WS.Create()
 	return self
 end
 
-function WS.Listen(port)
+function WS:Listen(port)
 	if(self.isClient) then
 		error("Websocket client tried to listen(), a server function")
 	else
 		self.isServer = true
 	end
 	self.port = port
+
+	local succes = self.bClient:Listen(self.port);
+	if succes then
+		if(WS.verbose) then
+			print("Listing on port "..self.port)
+		end
+	else
+		WS.Error("Couldn't listen to port "..self.port)
+	end
 end
 
 --High level utility function for just sending and/or retrieving a single frame
@@ -186,11 +210,23 @@ function WS:receiveCallback(socket,packet)
 end
 
 function WS:acceptCallback(server,client)
-	if(WS.verbose) then
-		print("Accepted connecting with client")
+
+	--Can only handle one client atm
+	if(not self.client) then
+		self.client = client
+		server:Accept()
+
+		if(WS.verbose) then
+			print("Accepted connecting with client")
+		end
+	else
+		--Sorry client :(
+
+		if(WS.verbose) then
+			print("Declined client connecting, can only handle one client right now")
+		end
+		client:Disconnect()
 	end
-	table.insert(self.clients,client)
-	server:Accept()
 end
 
 function WS.readNumber(packet,n) --read n bytes of data from packet
@@ -391,7 +427,7 @@ end
 --Handle http handshake, asumes packet is http handshake
 function WS:handleHTTPHandshake(packet)
 	local httphandshake = packet:ReadStringAll()
-	if(!WS.verifyhandshake(httphandshake)) then
+	if(!WS:verifyhandshake(httphandshake)) then
 		return false --If its invalid, abort --TODO: Close instead?
 	end
 
@@ -737,21 +773,31 @@ end
 
 
 --Verify if the HTTP handshake is valid
-function WS.verifyhandshake(message)
-	local msg = string.Explode(" ",message)
-
-	if(msg[1]!="HTTP/1.1") then
-		WS.error("Invalid server reponse\nInvalid first header:"..msg[1])
-		print("Server response:"..message)
-		return false
-	end
-
-	if(msg[2]!="101") then
-		WS.Error("Invalid server response\nInvalid HTTP response code "..msg[2])
-		print("Server response:"..message)
-		return false
-	end
+function WS:verifyhandshake(message)
 	--TODO: More checks, check the checks
+	if(WS.verbose) then
+		print("Veryifing handshake")
+	end
+	local msg = string.Explode(" ",message)
+	PrintTable(msg)
+
+	if(self.isClient) then
+
+		if(msg[1]!="HTTP/1.1") then
+			WS.error("Invalid server reponse\nInvalid first header:"..msg[1])
+			print("Server response:"..message)
+			return false
+		end
+
+		if(msg[2]!="101") then
+			WS.Error("Invalid server response\nInvalid HTTP response code "..msg[2])
+			print("Server response:"..message)
+			return false
+		end
+	else
+
+	end
+
 
 	return true
 end
