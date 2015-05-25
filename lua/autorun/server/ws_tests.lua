@@ -24,7 +24,6 @@ end
 
 
 fix.onClose = function()
-	print(autoadvancecase,currentCase,finalCase)
 	if(autoadvancecase && (currentCase < finalCase)) then
 		currentCase=currentCase+1
 		runCase()
@@ -107,6 +106,6 @@ concommand.Add("ws_listen",function()
 		gsocket:Disconnect()
 	end
 
-	gsocket = WS.Client()
+	gsocket = WS.Server()
 	gsocket:Listen(4176)
 end)

@@ -131,17 +131,19 @@ end
 
 function WS.Connection.Create(bsock,isServer,destination_info) --Takes fully enstablished bromsock and bool for being server
 	--Being server affect handshake order, masking requirements anup close order
-	--TODO Improve URL parser so we don't need to pass httphost and port around like this
-
 	local self = setmetatable({},WS.Connection)
+
+	self.isServer = isServer
+	self.isClient = not self.isServer
 
 	self.echo = false --Debugging/testing aid, set true to echo all text and binary frames back
 
 	self.bsock = bsock
-	table.Merge(self,destination_info)
 
-	self.isServer = isServer
-	self.isClient = not self.isServer
+	if(self.isClient) then
+		table.Merge(self,destination_info)
+	end
+
 
 	self.state = "CLOSED"
 	self.frame = {}
@@ -233,7 +235,7 @@ end
 function WS.Connection:OnFrameComplete(frame)
 	local opcode = frame.opcode
 	local payload = frame.payload
-	
+
 	if(WS.verbose) then
 		print("Received opcode: "..WS.findOpcode(opcode))
 		print("Received payload: ".. (frame.payload or "<NONE>"))
@@ -282,15 +284,12 @@ function WS.Connection:OnFrameComplete(frame)
 
 		end
 
-		print("split1",self.split_payload)
-
 		self:ReceiveFrame()
 		return
 	end
 
 	if(opcode == WS.OPCODES.OPCODE_CONTINUE) then
 
-		print("split2",self.split_payload)
 		if(self.split_payload==nil)  then
 			self:ProtocolError(1002,"Received continue opcode, yet nothing to continue")
 			return
@@ -335,7 +334,6 @@ function WS.Connection:OnPayloadComplete(payload,opcode)
 	end
 
 	if(self.echo) then
-		print(payload,opcode)
 		self:Send(payload,opcode)
 	end
 
@@ -479,6 +477,7 @@ function WS.Server:Listen(port)
 
 	local succes = self.bsock:Listen(self.port);
 	if succes then
+		self.bsock:Accept() --initial accept to get the first client
 		if(WS.verbose) then
 			print("Listing on port "..self.port)
 		end
@@ -488,11 +487,14 @@ function WS.Server:Listen(port)
 end
 
 function WS.Server:acceptCallback(server,client)
-	if(not self.client) then
-		sever:Accept()
-	else
-		client:Disconnect()
-	end
+	print("New client")
+	self.client = client
+
+	self.websocket = WS.Connection(self.client,true)
+	self.websocket.echo = true
+	self.websocket:ReceiveHTTPHandShake()
+
+	--If we could handle multiple clients, we'd have to call Accept() again to allow another client to connect
 end
 
 
@@ -881,7 +883,7 @@ function WS.Connection:onCloseMessage(frame) --Handle frame with close opdoe
 		end
 
 		if(!WS.isValidCloseReason(code)) then
-			self:ProtocolError(1002,"Invalid close code received: "..(reason or "NONE"))
+			self:ProtocolError(1002,"Invalid close code received: "..(code or "NONE"))
 			return
 		end
 	end
@@ -890,7 +892,6 @@ function WS.Connection:onCloseMessage(frame) --Handle frame with close opdoe
 		self.state="CLOSING"
 	end
 
-	print("sent,received close frame:",self.sentCloseFrame,self.receivedCloseFrame)
 
 	if(self.sentCloseFrame) then
 		self:Disconnect() -- We sent and received close frames, drop the connection
@@ -1183,9 +1184,58 @@ function WS:verifyhandshake(message)
 	if(WS.verbose) then
 		print("Veryifing handshake")
 	end
-	local msg = string.Explode(" ",message)
-	--PrintTable(msg)
+	local msg = string.Explode("\r\n",message)
 
+	--PrintTable(msg)
+	local headers = {}
+
+	local first_line = msg[1] --Not really a header, but oh well, also case-sensitive
+
+	local function fixString(str)
+		return string.Trim(string.lower(str))
+	end
+
+	for i=2,#msg do
+		local line = msg[i]
+		local findpos = string.find(line,":")
+		if(findpos and findpos > 0) then
+			local key = fixString(string.Left(line,findpos-1)) --This is case insensetive, lets lowercase it all
+			local value = fixString(string.sub(line,findpos+1))
+			--print("|",key,value,"|")
+			headers[key]=value
+		end
+	end
+	PrintTable(headers)
+
+	--HTTP version
+	local http_version = string.Explode(" ",first_line)[3]
+
+	if(http_version!="HTTP/1.1") then
+		WS.Error("Invalid HTTP version, remote party uses "..http_version)
+		return false
+	end
+
+	--Connection
+	if(headers.connection!="upgrade") then
+		print(headers.connection)
+		WS.Error("Invalid \"connection\" header")
+		return false
+	end
+
+	--Upgrade
+	if(headers.upgrade!="websocket") then
+		WS.Error("Invalid \"upgrade\" header")
+	end
+
+	if(headers["sec-websocket-version"]!="13") then
+		WS.Error("Invalid websocket version in HTTP header")
+	end
+
+	local user_agent = headers["user-agent"]
+
+	--TODO Sec-WebSocket-Key
+
+	--[[
 	if(self.isClient) then
 
 		if(msg[1]!="HTTP/1.1") then
@@ -1202,6 +1252,7 @@ function WS:verifyhandshake(message)
 	else
 
 	end
+	]]
 
 
 	return true
