@@ -147,6 +147,8 @@ function WS.Connection.Create(bsock,isServer,destination_info) --Takes fully ens
 	self.frame = {}
 
 	self.split_payload = nil
+	self.sentCloseFrame = false
+	self.receivedCloseFrame = false
 
 	--self.receiving_fragmented_payload = false
 	self.receivedHTTPHandshake = false
@@ -183,23 +185,29 @@ function WS.Connection:ReceiveFrame()
 		print("Preparing to receive next frame")
 	end
 	self.frame = {}
-	self.split_payload = nil
-	self.split_payload_type = nil
 
 	self.frame.receiveState = "HEADER"
 	self.bsock:Receive(2) --Receive the header (first 2 bytes)
 end
 
-function WS.Connection:Close()
-	if(self.state!="CLOSED") then
-		self:SendCloseFrame(1000)
-
-		if(self.state=="OPEN") then
-			self.state="CLOSING"
-		end
-	else
+function WS.Connection:Close(code)
+	if(self.state=="CLOSED") then
 		error("Connection already closed, cannot close, current state "..(self.state or "<INVALID STATE>"))
+		return
 	end
+
+	if(self.state=="OPEN") then
+		self.state="CLOSING"
+	end
+
+	if(not self.sentCloseFrame)	 then
+		self:SendCloseFrame(code or 1000)
+	end
+
+	if(not self.receivedCloseFrame) then
+		self:ReceiveFrame()
+	end
+
 end
 
 function WS.Connection:Disconnect()
@@ -207,7 +215,9 @@ function WS.Connection:Disconnect()
 		print("Closing connection")
 	end
 
-	if(self.isServer) then
+	self.bsock:Disconnect()
+
+	--[[if(self.isServer) then
 		self.bsock:Disconnect() --Server is responsible for dropping the TCP connection
 	else
 		timer.Simple(WS.close_timeout,function() --Client will close as well, but on a timeout
@@ -217,11 +227,13 @@ function WS.Connection:Disconnect()
 				self.bsock:Disconnect()
 			end
 		end)
-	end
+	end]]
 end
 
 function WS.Connection:OnFrameComplete(frame)
 	local opcode = frame.opcode
+	local payload = frame.payload
+	
 	if(WS.verbose) then
 		print("Received opcode: "..WS.findOpcode(opcode))
 		print("Received payload: ".. (frame.payload or "<NONE>"))
@@ -245,13 +257,13 @@ function WS.Connection:OnFrameComplete(frame)
 	end
 
 	if (opcode == WS.OPCODES.OPCODE_PING) then
-		self:onPing() --Reply to pings
+		self:onPing(frame) --Reply to pings
 		return
 	end
 
 	--Main frame handler
 	if (opcode == WS.OPCODES.OPCODE_TEXT_FRAME or opcode == WS.OPCODES.OPCODE_BINARY_FRAME) then --We accept binary frames, but don't really support them :V
-		local payload = frame.payload
+
 
 		if(self.split_payload!=nil) then
 			self:ProtocolError(1002,"Continuation frames must have continue opcode")
@@ -263,13 +275,22 @@ function WS.Connection:OnFrameComplete(frame)
 		else --If final frame in message, end, else save payload for next frame
 			self.split_payload=(payload or "")
 			self.split_payload_type = opcode
+
+			if(WS.verbose) then
+				print("Receiving split message")
+			end
+
 		end
+
+		print("split1",self.split_payload)
 
 		self:ReceiveFrame()
 		return
 	end
 
 	if(opcode == WS.OPCODES.OPCODE_CONTINUE) then
+
+		print("split2",self.split_payload)
 		if(self.split_payload==nil)  then
 			self:ProtocolError(1002,"Received continue opcode, yet nothing to continue")
 			return
@@ -309,6 +330,10 @@ function WS.Connection:OnDisconnect()
 end
 
 function WS.Connection:OnPayloadComplete(payload,opcode)
+	if(WS.verbose) then
+		print("Payload complete!")
+	end
+
 	if(self.echo) then
 		print(payload,opcode)
 		self:Send(payload,opcode)
@@ -655,7 +680,7 @@ function WS.Connection:createDataFrame(data,opcode)
 	else
 		data_size = 0
 	end
-	
+
 	if(WS.verbose) then print("Creating frame with size "..data_size.." and opcode "..WS.findOpcode(opcode)) end
 
 	WS.writeDataSize(packet,true,data_size)
@@ -852,7 +877,7 @@ function WS.Connection:onCloseMessage(frame) --Handle frame with close opdoe
 
 		code = (bit.lshift(string.byte(payload[1]),8)+string.byte(payload[2]))
 		if(WS.verbose) then
-			print("Close payload:"..payload.." - ".. code)
+			print("Received close payload: ".. code .. " - ".. payload)
 		end
 
 		if(!WS.isValidCloseReason(code)) then
@@ -865,29 +890,35 @@ function WS.Connection:onCloseMessage(frame) --Handle frame with close opdoe
 		self.state="CLOSING"
 	end
 
-	if(self.sentCloseFrame and self.receivedCloseFrame) then
+	print("sent,received close frame:",self.sentCloseFrame,self.receivedCloseFrame)
+
+	if(self.sentCloseFrame) then
 		self:Disconnect() -- We sent and received close frames, drop the connection
 	else
-		self:Close() --We've only received a close frame, reply with close frame
+		self:Close()
 	end
 end
 
---Ping message handler
-function WS.Connection:onPing()
-	local msg = self.current_message
+function WS.Connection:ProtocolError(code,message)
+	WS.Error(message)
+	self:Close(code)
+end
 
-	if(msg.payload_length>=126) then
-		self:ProtocolError(1002,"Ping payload too large ("..msg.payload_length..")")
+--Ping message handler
+function WS.Connection:onPing(frame)
+
+	if(frame.payload_length>=126) then
+		self:ProtocolError(1002,"Ping payload too large ("..frame.payload_length..")")
 		return
 	end
 
-	if(!msg.fin) then
+	if(!frame.fin) then
 		self:ProtocolError(1002,"Ping cannot be fragmented")
 		return
 	end
 
-	self:Send(msg.payload,WS.OPCODES.OPCODE_PONG) --Send pong with identical payload
-	self:prepareToReceive()
+	self:Send(frame.payload,WS.OPCODES.OPCODE_PONG) --Send pong with identical payload
+	self:ReceiveFrame()
 end
 --[[
 function WS:OnMessageEnd() --End of frame
