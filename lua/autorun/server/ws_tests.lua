@@ -15,14 +15,16 @@ local fix = {} --Err, need this to to fix the problem where 2 functions call eac
 local function runCase(caseId)
 	local id = caseId or currentCase
 	print("RUNNING CASE "..id)
-	gsocket = WS.Client()
-	gsocket.echo = true
-	gsocket:SetCallbackClose(fix.onClose)
-	gsocket:Connect(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
+
+	gsocket = WS.Client(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
+	gsocket.websocket.echo = true
+	gsocket:SetOnCloseCallback(fix.onClose)
+	gsocket:Connect()
 end
 
 
 fix.onClose = function()
+	print(autoadvancecase,currentCase,finalCase)
 	if(autoadvancecase && (currentCase < finalCase)) then
 		currentCase=currentCase+1
 		runCase()
@@ -30,10 +32,6 @@ fix.onClose = function()
 end
 
 concommand.Add("ws_case",function(ply,cmd,args)
-	if(gsocket&&gsocket:isActive()) then
-		gsocket:Close()
-	end
-
 	caseId = tonumber(args[1])
 	runCase(caseId)
 
@@ -64,19 +62,19 @@ concommand.Add("ws_test",function()
 end)
 
 concommand.Add("ws_updatereports",function(ply,cmd,args)
-	if(gsocket&&gsocket:isActive()) then
-		gsocket:Close()
-	end
+	--if(gsocket&&gsocket:isActive()) then
+		--gsocket:Close()
+	--end
 
-	gsocket = WS.Client()
+	gsocket = WS.Client(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
 	gsocket.echo = false
 	autoAdvance = false
-	gsocket:Connect(AB_URL.."/updateReports?agent=gmod_13",AB_PORT)
+	gsocket:Connect()
 end)
 
 
 concommand.Add("ws_close",function()
-	if(gsocket&&gsocket:isActive()) then
+	if(gsocket&&gsocket:IsActive()) then
 		gsocket:Close()
 	end
 end)
@@ -98,10 +96,10 @@ local function printData(data)
 end
 
 concommand.Add("ws_casecount",function()
-	local getcountsocket = WS()
+	local getcountsocket = WS.Client(AB_URL.."/getCaseCount",4175)
 
 	getcountsocket:SetCallbackReceive(printData)
-	getcountsocket:Connect(AB_URL.."/getCaseCount",4175)
+	getcountsocket:Connect()
 end)
 
 concommand.Add("ws_listen",function()
