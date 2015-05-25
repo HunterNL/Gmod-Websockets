@@ -5,6 +5,7 @@ if CLIENT then return end
 print("Websockets loaded")
 
 require( "bromsock" );
+include("sha1.lua")
 
 if
 	not WS
@@ -42,6 +43,8 @@ then
 	WS.verbose = false --Debugging
 	WS.close_timeout = 5 -- Time to wait for a server close reply before just closing the socket
 end;
+
+WS.GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 WS.OPCODES = {}
 WS.OPCODES.OPCODE_CONTINUE		= 0x0
@@ -467,7 +470,7 @@ function WS.Server:Listen(port)
 	if succes then
 		self.bsock:Accept() --initial accept to get the first client
 		if(WS.verbose) then
-			print("Listing on port "..self.port)
+			print("Listening on port "..self.port)
 		end
 	else
 		WS.Error("Couldn't listen to port "..self.port)
@@ -737,6 +740,11 @@ function WS.Connection:readHeader(packet)
 	--print("PAYLOAD LENGTH "..self.current_message.payload_length)
 end
 
+function WS.calculateSecKey(key)
+	print(key)
+	return util.Base64Encode(sha1.binary(key..WS.GUID))
+end
+
 
 --Sends the HTTP handshake
 function WS.Connection:SendHTTPHandShake()
@@ -745,30 +753,41 @@ function WS.Connection:SendHTTPHandShake()
 	if(self.isClient) then
 		packet:WriteLine("GET "..self.path.." HTTP/1.1" )
 		packet:WriteLine("Host: ".. self.httphost )
-
-		packet:WriteLine("Connection: Upgrade")
-		packet:WriteLine("Upgrade: websocket")
-
-		packet:WriteLine("Sec-WebSocket-Version: 13")
 		packet:WriteLine("Sec-WebSocket-Key: "..util.Base64Encode(WS.randomString(16)))
-
-		packet:WriteLine("") --Empty line to finish HTTP request
-	else
-		packet:WriteLine()
+		packet:WriteLine("Sec-WebSocket-Version: 13")
 	end
+
+	if(self.isServer) then
+		packet:WriteLine("HTTP/1.1 101 Switching Protocols")
+		packet:WriteLine("Sec-Websocket-Accept: "..WS.calculateSecKey(self.seckey))
+	end
+	packet:WriteLine("Connection: Upgrade")
+	packet:WriteLine("Upgrade: websocket")
+	packet:WriteLine("") --Empty line to finish HTTP request
+
 	self.bsock:Send(packet,true) --true means don't prepend payload size
 end
 
 --Handle http handshake, asumes packet is http handshake
 function WS.Connection:handleHTTPHandshake(packet)
 	local httphandshake = packet:ReadStringAll()
-	if(!WS:verifyhandshake(httphandshake)) then
-		return false --If its invalid, abort --TODO: Close instead?
+	self.seckey = WS.verifyhandshake(httphandshake,self.isServer or false)
+
+	if(self.seckey == nil or self.seckey == false) then
+		self:Disconnect()
+		return false --If there's no key, the handshake was invalid
 	end
 
 	if(WS.verbose) then print("Received valid HTTP handshake") end
 
 	self.receivedHTTPHandshake = true
+
+	if(self.isServer) then
+		self:SendHTTPHandShake()
+	end
+
+
+
 	self.state = "OPEN"
 
 	--If callback is set, call it
@@ -974,7 +993,7 @@ end
 
 
 --Verify if the HTTP handshake is valid
-function WS:verifyhandshake(message)
+function WS.verifyhandshake(message,isServer)
 	--TODO: More checks, check the checks
 	if(WS.verbose) then
 		print("Veryifing handshake")
@@ -995,7 +1014,7 @@ function WS:verifyhandshake(message)
 		local findpos = string.find(line,":")
 		if(findpos and findpos > 0) then
 			local key = fixString(string.Left(line,findpos-1)) --This is case insensetive, lets lowercase it all
-			local value = fixString(string.sub(line,findpos+1))
+			local value = string.Trim(string.sub(line,findpos+1))
 			--print("|",key,value,"|")
 			headers[key]=value
 		end
@@ -1006,15 +1025,18 @@ function WS:verifyhandshake(message)
 	--HTTP version
 
 
-	if(self.isServer) then
+	if(isServer) then
 		local http_version = string.Explode(" ",first_line)[3]
 		if(http_version!="HTTP/1.1") then
 			WS.Error("Invalid HTTP version, remote party uses "..http_version)
 			return false
 		end
-	end
 
-	if(self.isClient) then
+		if(headers["sec-websocket-version"]!="13") then
+			WS.Error("Client uses unsupported websocket version")
+			return false
+		end
+	else
 		if(first_line!="HTTP/1.1 101 Switching Protocols") then
 			WS.Error("Server not sending proper response code")
 			return false
@@ -1022,26 +1044,25 @@ function WS:verifyhandshake(message)
 	end
 
 	--Connection
-	if(headers.connection!="upgrade") then
+	if(string.find(string.lower(headers.connection),"upgrade")==nil) then --Doesn't need to be exact match, just contain the "upgrade" token
 		print(headers.connection)
 		WS.Error("Invalid \"connection\" header")
 		return false
 	end
 
 	--Upgrade
-	if(headers.upgrade!="websocket") then
+	if(string.find(string.lower(headers.upgrade),"websocket")==nil) then
 		WS.Error("Invalid \"upgrade\" header")
+		return false
 	end
 
-	if(headers["sec-websocket-version"]!="13") then
-		WS.Error("Invalid websocket version in HTTP header")
-	end
 
 	local user_agent = headers["user-agent"]
 
 	--TODO Sec-WebSocket-Key
 
-	return true
+	--Lill hack to pass the seckey back to the connection object
+	return headers["sec-websocket-key"] or true
 end
 
 --For debugging, find the key for the opcode value
