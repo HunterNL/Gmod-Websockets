@@ -102,10 +102,16 @@ concommand.Add("ws_casecount",function()
 end)
 
 concommand.Add("ws_listen",function()
-	if(gsocket) then
+	if(gsocket and gsocket:IsActive()) then
+		print("listen later")
+		gsocket:SetOnCloseCallback(function()
+			gsocket = WS.Server()
+			gsocket:Listen(4176)
+		end)
 		gsocket:Disconnect()
+	else
+		print("listen now")
+		gsocket = WS.Server()
+		gsocket:Listen(4176)
 	end
-
-	gsocket = WS.Server()
-	gsocket:Listen(4176)
 end)

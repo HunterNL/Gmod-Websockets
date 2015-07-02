@@ -220,6 +220,8 @@ function WS.Connection:Disconnect()
 		print("Closing connection")
 	end
 
+	print("socket state",self.bsocket:GetState())
+
 	self.bsock:Disconnect()
 end
 
@@ -488,6 +490,10 @@ function WS.Server:acceptCallback(server,client)
 	--If we could handle multiple clients, we'd have to call Accept() again to allow another client to connect
 end
 
+function WS.Server:IsActive()
+	return self.websocket:IsActive()
+end
+
 
 
 --High level utility function for just sending and/or retrieving a single frame
@@ -741,13 +747,15 @@ function WS.Connection:readHeader(packet)
 end
 
 function WS.calculateSecKey(key)
-	print(key)
 	return util.Base64Encode(sha1.binary(key..WS.GUID))
 end
 
 
 --Sends the HTTP handshake
 function WS.Connection:SendHTTPHandShake()
+	if(WS.verbose) then
+		print("Sending HTTP handshake")
+	end
 	local packet = BromPacket()
 
 	if(self.isClient) then
@@ -774,6 +782,7 @@ function WS.Connection:handleHTTPHandshake(packet)
 	self.seckey = WS.verifyhandshake(httphandshake,self.isServer or false)
 
 	if(self.seckey == nil or self.seckey == false) then
+		print("INvalid handsake, disconnecting")
 		self:Disconnect()
 		return false --If there's no key, the handshake was invalid
 	end
@@ -800,7 +809,7 @@ function WS.Connection:handleHTTPHandshake(packet)
 end
 
 
-function WS.Connection:isActive()
+function WS.Connection:IsActive()
 	return (self.state != "CLOSED")
 end
 
@@ -876,8 +885,9 @@ function WS.Connection:Send(data,opcode)
 		print("Cannot send message in current state "..self.state.."\nUse the onOpen callback")
 	end
 end
-
+--[[
 function WS:Disconnect()
+
 	local socketstate = self.bsock:GetState()
 	if(socketstate==2 or socketstate==7) then
 		self.bsock:Close()
@@ -885,6 +895,7 @@ function WS:Disconnect()
 
 	self:OnClose()
 end
+]]
 
 --Application/internal level close function, takes error code (see RFC) and if we should close quickly (don't inform server)
 function WS:Close(code)
@@ -1019,9 +1030,9 @@ function WS.verifyhandshake(message,isServer)
 			headers[key]=value
 		end
 	end
-	PrintTable(headers)
+	--PrintTable(headers)
 
-	print(first_line)
+	--print(first_line)
 	--HTTP version
 
 
