@@ -18,7 +18,7 @@ local function runCase(caseId)
 
 	gsocket = WS.Client(AB_URL.."/runCase?case="..id.."&agent=gmod_13",AB_PORT)
 	gsocket.websocket.echo = true
-	gsocket:SetOnCloseCallback(fix.onClose)
+	gsocket:on("close",fix.onClose)
 	gsocket:Connect()
 end
 
@@ -90,15 +90,14 @@ concommand.Add("ws_sendsize",function(ply,cmd,args)
 	end
 end)
 
-local function printData(data)
-	print(data)
-end
 
 concommand.Add("ws_casecount",function()
-	local getcountsocket = WS.Client(AB_URL.."/getCaseCount",4175)
+	--[[local getcountsocket = WS.Client(AB_URL.."/getCaseCount",4175)
 
 	getcountsocket:SetCallbackReceive(printData)
-	getcountsocket:Connect()
+	getcountsocket:Connect()]]
+
+	WS.Get(AB_URL.."/getCaseCount",4175,print)
 end)
 
 concommand.Add("ws_listen",function()

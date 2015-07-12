@@ -83,16 +83,19 @@ function WS.Client.Create(url,port)
 
 	self.websocket = WS.Connection(self.bsock,false,self.url_info)
 
+	self.eventListeners = {}
+
 	self.websocket:SetOnCloseCallback(function()
-		if(isfunction(self.onClose)) then
-			self.onClose()
-		end
+		self:fireEvent("close")
 	end)
 
-	--self.path = url_info.path or "/"
-	--self.host = url_info.host
+	self.websocket:SetOnMessageCallback(function(msg)
+		self:fireEvent("message",msg)
+	end)
 
-	--self.protocol = url_info.protocol
+	self.websocket:SetOnOpenCallback(function()
+		self:fireEvent("open")
+	end)
 
 	self.bsock:SetCallbackConnect(function(...)
 		self:OnConnected(...)
@@ -216,11 +219,10 @@ function WS.Connection:Close(code)
 end
 
 function WS.Connection:Disconnect()
+	if(self.state=="CLOSED") then return end;
 	if(WS.verbose) then
 		print("Closing connection")
 	end
-
-	print("socket state",self.bsocket:GetState())
 
 	self.bsock:Disconnect()
 end
@@ -314,6 +316,7 @@ function WS.Connection:OnSend()
 end
 
 function WS.Connection:OnDisconnect()
+	if(self.state=="CLOSED") then return end
 	self.state='CLOSED'
 	if(WS.verbose) then print("Disconnected, calling onclose") end
 	if(isfunction(self.onClose)) then
@@ -331,8 +334,8 @@ function WS.Connection:OnPayloadComplete(payload,opcode)
 	end
 
 	--If application registered callback, call it
-	if(isfunction(self.callbackReceive)) then
-		self.callbackReceive(payload)
+	if(isfunction(self.onMessage)) then
+		self.onMessage(payload)
 	end
 
 	--And reset
@@ -401,7 +404,7 @@ function WS.Connection:OnReceive(sock,packet)
 	end
 end
 
-
+--[[
 function WS.Client:SetOnOpenCallback(func)
 	if(isfunction(func)) then
 		self.onOpen = func
@@ -424,7 +427,7 @@ function WS.Client:SetOnCloseCallback(func)
 	else
 		error("Argument error, passed non-function to SetOnCloseCallback")
 	end
-end
+end]]
 
 
 
@@ -455,6 +458,8 @@ end
 
 function WS.Server.Create()
 	local self = setmetatable({},WS.Server)
+
+	self.eventListeners = {}
 
 	self.bsock = BromSock()
 
@@ -500,8 +505,7 @@ end
 function WS.Get(url,port,callback,data)
 	function innerscope() --hack(?) to create a new scope (and thus new sockets and callbacks) for every call to WS.Get
 		--Not sure how this plays with garbage collection though :s
-		local socket = WS()
-		socket:Connect(url,port)
+		local socket = WS.Client(url,port)
 
 		local function onOpen()
 			socket:Send(data or nil)
@@ -516,16 +520,19 @@ function WS.Get(url,port,callback,data)
 			--Perform cleanup, maybe?
 		end
 
-		socket:SetCallbackConnected(onOpen)
-		socket:SetCallbackReceive(onReady)
-		socket:SetCallbackClose(onClose)
+		socket:on("open",onOpen)
+		socket:on("message",onReady)
+		socket:on("close",onClose);
+
+--		socket:SetCallbackReceive(onReady)
+--		socket:SetCallbackClose(onClose)
 		socket:Connect()
 	end
 	innerscope()
 end
 
 
-
+--[[
 function WS:SetCallbackConnected(func)
 	self.callbackConnected = func
 end
@@ -536,7 +543,7 @@ end
 
 function WS:SetCallbackClose(func)
 	self.callbackClose = func
-end
+end]]
 
 function WS:acceptCallback(server,client)
 
@@ -800,8 +807,8 @@ function WS.Connection:handleHTTPHandshake(packet)
 	self.state = "OPEN"
 
 	--If callback is set, call it
-	if(isfunction(self.callbackConnected)) then
-		self.callbackConnected()
+	if(isfunction(self.onOpen)) then
+		self.onOpen()
 	end
 
 	--Prepare to receive websocket frames
@@ -1115,4 +1122,23 @@ function WS.parseUrl(url)
 	end
 
 	return ret;
+end
+
+--Event system
+function WS:on(eventName,func)
+	if(not self.eventListeners[eventName]) then
+		self.eventListeners[eventName] = {}
+	end
+
+	table.insert(self.eventListeners[eventName],func)
+end
+
+function WS:fireEvent(eventName,...)
+	local events = self.eventListeners[eventName]
+	if(not events) then return end; --If no events, return
+
+	--Call every callback with given arguments
+	for k,v in pairs(events) do
+		v(...)
+	end
 end
