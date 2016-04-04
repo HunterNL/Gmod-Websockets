@@ -51,13 +51,13 @@ concommand.Add("ws_test",function()
 
 	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
 	--gsocket = WS.Create("echo.websocket.org/?encoding=text",80)
-	gsocket = WS.Client()
+	gsocket = WS.Client("ws://echo.websocket.org/", 80)
 	--gsocket = WS.Create("roundtable.servebeer.com",11155)
 	--gsocket = WS.Create("192.168.1.123",9001)
 	--gsocket = WS.Create("hunternl.no-ip.org",4175)
 	--gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
 	gsocket.echo = false
-	gsocket:Connect("ws://echo.websocket.org/",80)
+	gsocket:Connect()
 end)
 
 concommand.Add("ws_updatereports",function(ply,cmd,args)
