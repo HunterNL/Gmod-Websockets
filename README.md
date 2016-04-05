@@ -23,10 +23,10 @@ Likely to change if I pick this up again, but as of this commit:
 
 `WS:IsActive()` Returns `true` if connection is active, `false` otherwise
 
-`WS:SetOnOpenCallback(func)` Takes a function to run when a websocket connection has been established
+`WS:on("open", func)` Takes a function to run when a websocket connection has been established
 
-`WS:SetOnMessageCallback(func)` Takes a function to run when a message from the server has been received, receives single argument with server message as string
+`WS:on("message", func)` Takes a function to run when a message from the server has been received, receives single argument with server message as string
 
-`WS:SetOnCloseCallback(func)` Takes a function to run when the connection is closed
+`WS:on("close", func)` Takes a function to run when the connection is closed
 
 :tiger2:
