@@ -1,7 +1,9 @@
 #Gmod Websockets
-Lua module to allow communication via websockets
+GLua module to allow communication via websockets
 
 Requires [gm_bromsock](https://github.com/Bromvlieg/gm_bromsock)
+
+Uses a SHA1 implementation by [Enrique García](https://github.com/kikito) [Repo link](https://github.com/kikito/sha1.lua)
 
 Tested with [Autobahn test suite](http://autobahn.ws/testsuite/)
 
