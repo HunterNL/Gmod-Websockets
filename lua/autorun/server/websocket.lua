@@ -85,8 +85,8 @@ function WS.Client.Create(url,port)
 
 	self.eventListeners = {}
 
-	self.websocket:SetOnCloseCallback(function()
-		self:fireEvent("close")
+	self.websocket:SetOnCloseCallback(function(code,payload)
+		self:fireEvent("close",code,payload)
 	end)
 
 	self.websocket:SetOnMessageCallback(function(msg)
@@ -135,7 +135,7 @@ end
 function WS.Client:IsActive()
 
 	local wsstate = self.websocket.state
-	print("isactive state "..wsstate)
+	--print("isactive state "..wsstate)
 	return (wsstate != "CLOSED")
 end
 
@@ -324,7 +324,9 @@ function WS.Connection:OnDisconnect()
 	self.state='CLOSED'
 	if(WS.verbose) then print("Disconnected, calling onclose") end
 	if(isfunction(self.onClose)) then
-		self.onClose()
+		self.onClose(self.closeEventCode,self.closeEventMessage)
+		--good housekeeping i guess
+		self.closeEventMessage,self.closeEventCode = nil,nil
 	end
 end
 
@@ -793,7 +795,7 @@ function WS.Connection:handleHTTPHandshake(packet)
 	self.seckey = WS.verifyhandshake(httphandshake,self.isServer or false)
 
 	if(self.seckey == nil or self.seckey == false) then
-		print("INvalid handsake, disconnecting")
+		print("Invalid handshake, disconnecting")
 		self:Disconnect()
 		return false --If there's no key, the handshake was invalid
 	end
@@ -847,6 +849,9 @@ function WS.Connection:onCloseMessage(frame) --Handle frame with close opdoe
 			print("Received close payload: ".. code .. " - ".. payload)
 		end
 
+		self.closeEventCode = code or 1000
+		self.closeEventMessage = string.sub(payload,3) or ""
+
 		if(!WS.isValidCloseReason(code)) then
 			self:ProtocolError(1002,"Invalid close code received: "..(code or "NONE"))
 			return
@@ -856,7 +861,6 @@ function WS.Connection:onCloseMessage(frame) --Handle frame with close opdoe
 	if(self.state=="OPEN") then
 		self.state="CLOSING"
 	end
-
 
 	if(self.sentCloseFrame) then
 		self:Disconnect() -- We sent and received close frames, drop the connection
@@ -1059,7 +1063,7 @@ function WS.verifyhandshake(message,isServer)
 			return false
 		end
 	else
-		if(first_line!="HTTP/1.1 101 Switching Protocols") then
+		if( not string.find(first_line,"101") ) then
 			WS.Error("Server not sending proper response code")
 			return false
 		end
