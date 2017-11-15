@@ -324,7 +324,7 @@ function WS.Connection:OnDisconnect()
 	self.state='CLOSED'
 	if(WS.verbose) then print("Disconnected, calling onclose") end
 	if(isfunction(self.onClose)) then
-		self.onClose(self.closeEventCode,self.closeEventMessage)
+		self.onClose(self.closeEventCode or 1000,self.closeEventMessage or "")
 		--good housekeeping i guess
 		self.closeEventMessage,self.closeEventCode = nil,nil
 	end
