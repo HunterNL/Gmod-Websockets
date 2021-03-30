@@ -1053,7 +1053,7 @@ function WS.verifyhandshake(message,isServer)
 			return false
 		end
 	else
-		if(first_line!="HTTP/1.1 101 Switching Protocols") then
+		if(not string.StartWith(first_line,"HTTP/1.1 101")) then
 			WS.Error("Server not sending proper response code")
 			return false
 		end
