@@ -129,7 +129,9 @@ function WS.Client:Send(data)
 end
 
 function WS.Client:Close()
-	self.websocket:Close()
+	if(self.websocket.state != "CLOSED") then
+		self.websocket:Close()
+	end
 end
 
 function WS.Client:IsActive()
@@ -507,32 +509,24 @@ end
 
 --High level utility function for just sending and/or retrieving a single frame
 function WS.Get(url,port,callback,data)
-	function innerscope() --hack(?) to create a new scope (and thus new sockets and callbacks) for every call to WS.Get
-		--Not sure how this plays with garbage collection though :s
-		local socket = WS.Client(url,port)
+	local socket = WS.Client(url,port)
 
-		local function onOpen()
-			socket:Send(data or nil)
-		end
-
-		local function onReady(data)
-			callback(data)
-			socket:Close()
-		end
-
-		local function onClose()
-			--Perform cleanup, maybe?
-		end
-
-		socket:on("open",onOpen)
-		socket:on("message",onReady)
-		socket:on("close",onClose);
-
---		socket:SetCallbackReceive(onReady)
---		socket:SetCallbackClose(onClose)
-		socket:Connect()
+	local function onOpen()
+		socket:Send(data or nil)
 	end
-	innerscope()
+
+	local function onReady(data)
+		callback(data)
+		socket:Close()
+	end
+
+
+	socket:on("open",onOpen)
+	socket:on("message",onReady)
+
+	-- socket:SetCallbackReceive(onReady)
+	-- socket:SetCallbackClose(onClose)
+	socket:Connect()
 end
 
 
