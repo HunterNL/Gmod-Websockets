@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  autobahn:
+    image: crossbario/autobahn-testsuite
+    ports:
+      - "9333:9333"
+    volumes:
+      - ./test_config:/config
+      - ./test_reports:/reports
+

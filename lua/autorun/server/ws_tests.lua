@@ -1,6 +1,6 @@
 
-local AB_URL = "hunternl.no-ip.org" //Autobahn ip and port
-local AB_PORT = 4175
+local AB_URL = "localhost" -- Autobahn ip and port
+local AB_PORT = 9333
 
 local autoAdvance = false
 local currentCase = 0
@@ -51,9 +51,9 @@ concommand.Add("ws_test",function()
 
 	--gsocket = WS.Create("http://requestb.in/1iqubg81",80)
 	--gsocket = WS.Create("echo.websocket.org/?encoding=text",80)
-	gsocket = WS.Client("ws://echo.websocket.org/", 80)
+	--- gsocket = WS.Client("ws://echo.websocket.org/", 80)
 	--gsocket = WS.Create("roundtable.servebeer.com",11155)
-	--gsocket = WS.Create("192.168.1.123",9001)
+	gsocket = WS.Client("127.0.0.1",9333)
 	--gsocket = WS.Create("hunternl.no-ip.org",4175)
 	--gsocket = WS.Create("hunternl.no-ip.org/getCaseCount",4175)
 	gsocket.echo = false
@@ -97,7 +97,7 @@ concommand.Add("ws_casecount",function()
 	getcountsocket:SetCallbackReceive(printData)
 	getcountsocket:Connect()]]
 
-	WS.Get(AB_URL.."/getCaseCount",4175,print)
+	WS.Get(AB_URL.."/getCaseCount",AB_PORT,print)
 end)
 
 concommand.Add("ws_listen",function()
