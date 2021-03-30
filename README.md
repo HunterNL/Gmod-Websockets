@@ -1,4 +1,4 @@
-#Gmod Websockets
+# Gmod Websockets
 GLua module to allow communication via websockets
 
 Requires [gm_bromsock](https://github.com/Bromvlieg/gm_bromsock)
@@ -7,12 +7,12 @@ Uses a SHA1 implementation by [Enrique García](https://github.com/kikito) [Repo
 
 Tested with [Autobahn test suite](http://autobahn.ws/testsuite/)
 
-####Limitations
+#### Limitations
 * No UTF8 validity checks
 * Cannot send/receive payloads larger than 4MB
 
 
-####Documentation
+#### Documentation
 Likely to change if I pick this up again, but as of this commit:
 
  `WS.Client(url,port)` takes a url and port to server, returns a websocket client object
